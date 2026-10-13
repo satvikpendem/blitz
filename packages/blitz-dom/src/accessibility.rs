@@ -1,7 +1,7 @@
 use crate::{
     BaseDocument, ElementData, Node as BlitzDomNode, NodeData, NodeId as BlitzDomNodeId, local_name,
 };
-use accesskit::{Node as AccessKitNode, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
+use accesskit::{Node as AccessKitNode, NodeId, Role, Toggled, TreeId, TreeInfo, TreeUpdate};
 use style::properties::longhands::visibility;
 
 impl BaseDocument {
@@ -127,6 +127,23 @@ impl BaseDocument {
 
             builder.set_role(role);
 
+            // Explicit names are needed for icon-only and externally labelled controls.
+            if let Some(label) = element_data.attr(local_name!("aria-label"))
+                && !label.trim().is_empty()
+            {
+                builder.set_label(label);
+            }
+
+            // The live checkedness can differ from the initial HTML attribute after
+            // pointer input. Expose the current control state to assistive technology.
+            if let Some(checked) = element_data.checkbox_input_checked() {
+                builder.set_toggled(if checked {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                });
+            }
+
             // https://www.w3.org/TR/wai-aria-1.2/#tree_exclusion
             if element_data.attr(local_name!("aria-hidden")) == Some("true") {
                 builder.set_hidden();
@@ -148,9 +165,6 @@ impl BaseDocument {
                 builder.set_selected(aria_selected);
             }
 
-            if let Some(aria_label) = element_data.attr(local_name!("aria-label")) {
-                builder.set_label(aria_label);
-            }
             if let Some(aria_description) = element_data.attr(local_name!("aria-description")) {
                 builder.set_description(aria_description);
             }
