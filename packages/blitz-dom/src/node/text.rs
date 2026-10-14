@@ -794,10 +794,18 @@ impl TextInputData {
                 before_bytes,
                 after_bytes,
             } => {
-                let _ = before_bytes;
-                let _ = after_bytes;
-                // TODO
-                None
+                let old_len = driver.editor.raw_text().len();
+                // The event counts UTF-8 bytes around the selection. Parley's
+                // helpers clamp buffer limits, preserve the selection, update
+                // composition and reject ranges inside a Unicode scalar.
+                if let Some(count) = core::num::NonZeroUsize::new(before_bytes) {
+                    driver.delete_bytes_before_selection(count);
+                }
+                if let Some(count) = core::num::NonZeroUsize::new(after_bytes) {
+                    driver.delete_bytes_after_selection(count);
+                }
+                (driver.editor.raw_text().len() != old_len)
+                    .then_some(GeneratedTextInputEvent::Input)
             }
         }
     }
