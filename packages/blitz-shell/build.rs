@@ -34,6 +34,7 @@ fn run(command: &mut Command) {
 }
 fn main() {
     println!("cargo:rerun-if-changed=android/InsetsObserver.java");
+    println!("cargo:rerun-if-changed=android/TextInputHost.java");
     for name in ["ANDROID_HOME", "ANDROID_SDK_ROOT", "JAVA_HOME"] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -63,7 +64,8 @@ fn main() {
         .arg(platform.join("android.jar"))
         .arg("-d")
         .arg(&classes)
-        .arg("android/InsetsObserver.java"));
+        .arg("android/InsetsObserver.java")
+        .arg("android/TextInputHost.java"));
     let mut d8 = Command::new(tools.join(if cfg!(windows) { "d8.bat" } else { "d8" }));
     d8.args(["--min-api", "26", "--lib"])
         .arg(platform.join("android.jar"))

@@ -45,6 +45,12 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
     ) {
         match event {
             #[cfg(target_os = "android")]
+            BlitzShellEvent::AndroidIme { window_id, monitor_id, session, sequence, event } => {
+                if let Some(window) = self.windows.get_mut(&window_id) {
+                    window.apply_android_ime(monitor_id, session, sequence, event);
+                }
+            }
+            #[cfg(target_os = "android")]
             BlitzShellEvent::AndroidInsetsChanged {
                 window_id,
                 monitor_id,

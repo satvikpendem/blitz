@@ -7,6 +7,8 @@ mod accessibility_label;
 mod accessibility_roles;
 mod accessibility_control_state;
 mod accessibility_actions;
+#[path = "../../../packages/blitz-shell/src/android_ime_state.rs"]
+mod android_ime_state;
 mod animations;
 mod anonymous_block_cache_invalidation;
 mod anonymous_block_leak;

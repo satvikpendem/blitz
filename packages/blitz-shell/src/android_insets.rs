@@ -59,43 +59,15 @@ fn observer_class(env: &mut JNIEnv, activity: &JObject) -> jni::errors::Result<G
     if let Some(class) = CLASS.get() {
         return Ok(class.clone());
     }
-    let bytes =
-        env.byte_array_from_slice(include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex")))?;
-    let buffer = env
-        .call_static_method(
-            "java/nio/ByteBuffer",
-            "wrap",
-            "([B)Ljava/nio/ByteBuffer;",
-            &[(&bytes).into()],
-        )?
-        .l()?;
-    let parent = env
-        .call_method(activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
-        .l()?;
-    let loader = env.new_object(
-        "dalvik/system/InMemoryDexClassLoader",
-        "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V",
-        &[(&buffer).into(), (&parent).into()],
-    )?;
-    let name = env.new_string("dev.blitz.shell.InsetsObserver")?;
-    let class = JClass::from(
-        env.call_method(
-            loader,
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[(&name).into()],
-        )?
-        .l()?,
-    );
+    let class = super::android_java::load_class(env, activity, "dev.blitz.shell.InsetsObserver")?;
     env.register_native_methods(
-        &class,
+        <&JClass>::from(class.as_obj()),
         &[NativeMethod {
             name: "onInsets".into(),
             sig: "(JIIII)V".into(),
             fn_ptr: on_insets as *mut c_void,
         }],
     )?;
-    let class = env.new_global_ref(class)?;
     let _ = CLASS.set(class.clone());
     Ok(class)
 }

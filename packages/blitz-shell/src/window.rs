@@ -64,6 +64,9 @@ impl<Rend: WindowRenderer> WindowConfig<Rend> {
     }
 }
 
+#[cfg(target_os = "android")]
+mod android_ime;
+
 pub struct View<Rend: WindowRenderer> {
     pub doc: Box<dyn Document>,
 
@@ -99,6 +102,14 @@ pub struct View<Rend: WindowRenderer> {
     pub safe_area_insets: PhysicalInsets<u32>,
     #[cfg(target_os = "android")]
     android_insets: crate::android_insets::AndroidInsetsMonitor,
+    #[cfg(target_os = "android")]
+    android_ime: crate::android_ime::AndroidImeBridge,
+    #[cfg(target_os = "android")]
+    android_ime_focus: Option<blitz_dom::NodeId>,
+    #[cfg(target_os = "android")]
+    android_ime_generation: u64,
+    #[cfg(target_os = "android")]
+    android_ime_acknowledged: u64,
 
     #[cfg(target_arch = "wasm32")]
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
@@ -164,6 +175,15 @@ impl<Rend: WindowRenderer> View<Rend> {
                 },
             )
             .expect("Android window-inset observer initialization failed")
+        };
+        #[cfg(target_os = "android")]
+        let android_ime = {
+            let window_id = winit_window.id();
+            let proxy = proxy.clone();
+            crate::android_ime::AndroidImeBridge::new(&crate::current_android_app(),
+                move |monitor_id, session, sequence, event| {
+                    proxy.send_event(BlitzShellEvent::AndroidIme { window_id, monitor_id, session, sequence, event });
+                }).expect("Android input connection initialization failed")
         };
         #[cfg(feature = "accessibility")]
         let accessibility = AccessibilityState::new(&*winit_window, proxy.clone());
@@ -239,6 +259,14 @@ impl<Rend: WindowRenderer> View<Rend> {
             safe_area_insets,
             #[cfg(target_os = "android")]
             android_insets,
+            #[cfg(target_os = "android")]
+            android_ime,
+            #[cfg(target_os = "android")]
+            android_ime_focus: None,
+            #[cfg(target_os = "android")]
+            android_ime_generation: 0,
+            #[cfg(target_os = "android")]
+            android_ime_acknowledged: 0,
             #[cfg(target_arch = "wasm32")]
             pending_resize: None,
             #[cfg(target_arch = "wasm32")]
@@ -410,6 +438,8 @@ impl<Rend: WindowRenderer> View<Rend> {
     }
 
     pub fn redraw(&mut self) {
+        #[cfg(target_os = "android")]
+        self.sync_android_ime();
         #[cfg(target_os = "ios")]
         self.ios_request_redraw.set(false);
         let animation_time = self.current_animation_time();
@@ -568,8 +598,12 @@ impl<Rend: WindowRenderer> View<Rend> {
     pub fn handle_accessibility_action(&mut self, request: &accesskit::ActionRequest) {
         let event = self.doc.inner().accessibility_action_event(request);
         if let Some(event) = event {
+            #[cfg(target_os = "android")]
+            let show_ime = matches!(&event, UiEvent::Focus(_));
             self.doc.handle_ui_event(event);
             self.poll();
+            #[cfg(target_os = "android")]
+            if show_ime { self.show_android_ime(); }
             self.request_redraw();
         }
     }
@@ -633,6 +667,16 @@ impl<Rend: WindowRenderer> View<Rend> {
     }
 
     pub fn handle_winit_event(&mut self, event: WindowEvent) {
+        #[cfg(target_os = "android")]
+        let show_ime = match &event {
+            WindowEvent::PointerButton { state: ElementState::Pressed, position, .. } => {
+                let coords = self.pointer_coords(*position);
+                let inner = self.doc.inner();
+                inner.hit(coords.page_x, coords.page_y).and_then(|hit| inner.get_node(hit.node_id))
+                    .and_then(|node| node.element_data()).and_then(|el| el.text_input_data()).is_some()
+            }
+            _ => false,
+        };
         // Update accessibility focus and window size state in response to a Winit WindowEvent
         #[cfg(feature = "accessibility")]
         self.accessibility
@@ -928,5 +972,9 @@ impl<Rend: WindowRenderer> View<Rend> {
             WindowEvent::DragLeft { .. } => {},
             _ => {}
         }
+        #[cfg(target_os = "android")]
+        if show_ime { self.show_android_ime(); }
     }
+
+
 }
