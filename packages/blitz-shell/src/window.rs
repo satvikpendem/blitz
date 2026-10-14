@@ -373,14 +373,6 @@ impl<Rend: WindowRenderer> View<Rend> {
         if let Some(waker) = &self.waker {
             let cx = std::task::Context::from_waker(waker);
             if self.doc.poll(Some(cx)) {
-                #[cfg(feature = "accessibility")]
-                {
-                    let inner = self.doc.inner();
-                    if inner.has_changes() {
-                        self.accessibility.update_tree(&inner);
-                    }
-                }
-
                 self.request_redraw();
                 return true;
             }
@@ -419,6 +411,11 @@ impl<Rend: WindowRenderer> View<Rend> {
         let insets = self.safe_area_insets;
 
         if !is_blocked && is_visible {
+            // Publish after layout, so new controls, scrolling and resize have
+            // current geometry. The adapter skips construction while inactive.
+            #[cfg(feature = "accessibility")]
+            self.accessibility
+                .update_tree(&inner, (insets.left, insets.top));
             self.renderer.render(|scene| {
                 paint_scene(
                     scene,
@@ -521,7 +518,20 @@ impl<Rend: WindowRenderer> View<Rend> {
     #[cfg(feature = "accessibility")]
     pub fn build_accessibility_tree(&mut self) {
         let inner = self.doc.inner();
-        self.accessibility.update_tree(&inner);
+        self.accessibility.update_tree(
+            &inner,
+            (self.safe_area_insets.left, self.safe_area_insets.top),
+        );
+    }
+
+    #[cfg(feature = "accessibility")]
+    pub fn handle_accessibility_action(&mut self, request: &accesskit::ActionRequest) {
+        let event = self.doc.inner().accessibility_action_event(request);
+        if let Some(event) = event {
+            self.doc.handle_ui_event(event);
+            self.poll();
+            self.request_redraw();
+        }
     }
 
     #[cfg(target_arch = "wasm32")]

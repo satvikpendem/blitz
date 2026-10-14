@@ -225,6 +225,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             UiEvent::KeyDown(_) => focussed_node_id,
             UiEvent::Ime(_) => focussed_node_id,
             UiEvent::AppleStandardKeybinding(_) => focussed_node_id,
+            UiEvent::Activate(target) | UiEvent::Focus(target) => Some(target),
         };
         // Fall back to the root element. A document without a root element (e.g. an
         // empty iframe sub-document) has no event target, so there is nothing to do.
@@ -234,6 +235,41 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         };
 
         match event {
+            UiEvent::Activate(target) => {
+                let doc = self.doc.inner();
+                let Some(node) = doc.get_node(target) else {
+                    return;
+                };
+                if node
+                    .element_state()
+                    .contains(style_dom::ElementState::DISABLED)
+                {
+                    return;
+                }
+                let data = node.synthetic_click_event(Default::default());
+                drop(doc);
+                self.handle_dom_event(DomEvent::new(target, data));
+            }
+            UiEvent::Focus(target) => {
+                let mut doc = self.doc.inner_mut();
+                if !doc.get_node(target).is_some_and(|node| {
+                    node.is_focussable()
+                        && !node
+                            .element_state()
+                            .contains(style_dom::ElementState::DISABLED)
+                }) {
+                    return;
+                }
+                super::focus::generate_focus_events(
+                    &mut doc,
+                    &mut |doc| {
+                        doc.set_focus_to(target);
+                    },
+                    &mut |event| self.queue.push_back(event),
+                );
+                drop(doc);
+                self.process_queue();
+            }
             UiEvent::PointerMove(data) => {
                 self.handle_pointer_event(
                     target,

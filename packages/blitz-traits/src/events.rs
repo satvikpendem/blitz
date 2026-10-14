@@ -71,6 +71,10 @@ pub enum UiEvent {
     KeyDown(BlitzKeyEvent),
     Ime(BlitzImeEvent),
     AppleStandardKeybinding(SmolStr),
+    /// Activate a semantic target without pointer hit testing.
+    Activate(NodeId),
+    /// Move input focus to a semantic target.
+    Focus(NodeId),
 }
 impl UiEvent {
     pub fn discriminant(&self) -> u8 {

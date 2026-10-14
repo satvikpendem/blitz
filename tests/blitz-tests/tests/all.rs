@@ -6,6 +6,7 @@ mod accessibility_hidden;
 mod accessibility_label;
 mod accessibility_roles;
 mod accessibility_control_state;
+mod accessibility_actions;
 mod animations;
 mod anonymous_block_cache_invalidation;
 mod anonymous_block_leak;

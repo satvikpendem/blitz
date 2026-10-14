@@ -1,13 +1,26 @@
 use crate::{
     BaseDocument, ElementData, Node as BlitzDomNode, NodeData, NodeId as BlitzDomNodeId, local_name,
 };
-use accesskit::{Node as AccessKitNode, NodeId, Role, Toggled, TreeId, TreeInfo, TreeUpdate};
+use accesskit::{
+    Action, ActionRequest, Affine, Node as AccessKitNode, NodeId, Rect, Role, Toggled, TreeId,
+    TreeInfo, TreeUpdate,
+};
+use blitz_traits::events::UiEvent;
 use style::properties::longhands::visibility;
 
 impl BaseDocument {
     pub fn build_accessibility_tree(&self) -> TreeUpdate {
         let mut nodes = std::collections::HashMap::new();
         let mut window = AccessKitNode::new(Role::Window);
+        let scale = self.viewport().scale_f64();
+        window.set_transform(Affine::scale(scale));
+        let (width, height) = self.viewport().window_size;
+        window.set_bounds(Rect::new(
+            0.0,
+            0.0,
+            width as f64 / scale,
+            height as f64 / scale,
+        ));
         let mut hidden_nodes = std::collections::HashSet::new();
         let mut labelled_by_nodes = Vec::new();
         let mut described_by_nodes = Vec::new();
@@ -104,6 +117,39 @@ impl BaseDocument {
             .filter_map(|dom_id| self.nodes_to_id.get(dom_id)?.first().copied())
     }
 
+    /// Only dispatch actions advertised by a live, exposed node in this tree.
+    /// The versioned node id rejects requests for a removed/reused DOM slot.
+    pub fn accessibility_action_event(&self, request: &ActionRequest) -> Option<UiEvent> {
+        if request.target_tree != TreeId::ROOT {
+            return None;
+        }
+        let target = blitz_traits::node_id::NodeId::from_u64(request.target_node.0);
+        let mut ancestor = Some(target);
+        while let Some(id) = ancestor {
+            let node = self.get_node(id)?;
+            if node
+                .element_data()
+                .is_some_and(|element| element.attr(local_name!("aria-hidden")) == Some("true"))
+            {
+                return None;
+            }
+            ancestor = node.parent;
+        }
+        let tree = self.build_accessibility_tree();
+        let (_, node) = tree
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == request.target_node)?;
+        if node.is_hidden() || !node.supports_action(request.action) {
+            return None;
+        }
+        match request.action {
+            Action::Click => Some(UiEvent::Activate(target)),
+            Action::Focus => Some(UiEvent::Focus(target)),
+            _ => None,
+        }
+    }
+
     fn build_accessibility_node(
         &self,
         node: &BlitzDomNode,
@@ -112,6 +158,16 @@ impl BaseDocument {
         let id = NodeId(node.id.as_u64());
 
         let mut builder = AccessKitNode::new(Role::GenericContainer);
+        if node.element_data().is_some()
+            && let Some(rect) = self.get_client_bounding_rect(node.id)
+        {
+            builder.set_bounds(Rect::new(
+                rect.x,
+                rect.y,
+                rect.x + rect.width,
+                rect.y + rect.height,
+            ));
+        }
         if node.parent.is_none() {
             builder.set_role(Role::Window)
         } else if let Some(element_data) = node.element_data() {
@@ -126,6 +182,31 @@ impl BaseDocument {
                 .unwrap_or(Role::GenericContainer);
 
             builder.set_role(role);
+
+            let disabled = node
+                .element_state()
+                .contains(style_dom::ElementState::DISABLED)
+                || element_data.attr(local_name!("aria-disabled")) == Some("true");
+            if disabled {
+                builder.set_disabled();
+            } else {
+                if matches!(
+                    role,
+                    Role::Button
+                        | Role::DefaultButton
+                        | Role::CheckBox
+                        | Role::RadioButton
+                        | Role::Link
+                        | Role::MenuItem
+                        | Role::MenuItemCheckBox
+                        | Role::MenuItemRadio
+                ) {
+                    builder.add_action(Action::Click);
+                }
+                if node.is_focussable() {
+                    builder.add_action(Action::Focus);
+                }
+            }
 
             // Explicit names are needed for icon-only and externally labelled controls.
             if let Some(label) = element_data.attr(local_name!("aria-label"))
@@ -153,10 +234,6 @@ impl BaseDocument {
                 && let Ok(aria_expanded) = aria_expanded.parse()
             {
                 builder.set_expanded(aria_expanded);
-            }
-
-            if element_data.attr(local_name!("aria-disabled")) == Some("true") {
-                builder.set_disabled();
             }
 
             if let Some(aria_selected) = element_data.attr(local_name!("aria-selected"))
