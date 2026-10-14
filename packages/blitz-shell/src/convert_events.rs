@@ -172,8 +172,41 @@ pub(crate) fn winit_physical_key_to_kbt_code(physical_key: &WinitPhysicalKey) ->
 pub(crate) fn winit_key_to_kbt_key(winit_key: &WinitKey) -> Key {
     match winit_key {
         WinitKey::Named(named_key) => Key::Named(*named_key),
-        WinitKey::Character(c) => Key::Character(c.to_string()),
+        // Android key maps can report non-printing controls as Unicode text.
+        // Normalize key semantics without altering printable or IME text.
+        WinitKey::Character(c) => match c.as_str() {
+            "\r" | "\n" => Key::Named(NamedKey::Enter),
+            "\t" => Key::Named(NamedKey::Tab),
+            "\u{8}" => Key::Named(NamedKey::Backspace),
+            "\u{1b}" => Key::Named(NamedKey::Escape),
+            _ => Key::Character(c.to_string()),
+        },
         WinitKey::Unidentified(_) => Key::Named(NamedKey::Unidentified),
         WinitKey::Dead(_) => Key::Named(NamedKey::Dead),
+    }
+}
+
+#[cfg(test)]
+mod control_character_tests {
+    use super::*;
+
+    #[test]
+    fn unicode_control_keys_have_named_semantics() {
+        for (text, expected) in [
+            ("\n", NamedKey::Enter), ("\r", NamedKey::Enter),
+            ("\t", NamedKey::Tab), ("\u{8}", NamedKey::Backspace),
+            ("\u{1b}", NamedKey::Escape),
+        ] {
+            assert_eq!(winit_key_to_kbt_key(&WinitKey::Character(text.into())), Key::Named(expected));
+        }
+        assert_eq!(winit_key_to_kbt_key(&WinitKey::Named(NamedKey::Enter)), Key::Named(NamedKey::Enter));
+    }
+
+    #[test]
+    fn printable_unicode_and_dead_keys_are_preserved() {
+        for text in ["Café", "東京", "🦀", " ", "a\nb"] {
+            assert_eq!(winit_key_to_kbt_key(&WinitKey::Character(text.into())), Key::Character(text.into()));
+        }
+        assert_eq!(winit_key_to_kbt_key(&WinitKey::Dead(Some('´'))), Key::Named(NamedKey::Dead));
     }
 }
