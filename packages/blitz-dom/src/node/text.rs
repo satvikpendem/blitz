@@ -97,7 +97,10 @@ impl TextInputData {
         layout_ctx: &mut LayoutContext<TextBrush>,
         text: &str,
     ) {
-        if self.editor.text() != text {
+        // Controlled UIs can echo either the committed value or the raw Input
+        // value (including preedit). Neither unchanged value should cancel the
+        // active composition or reset its selection.
+        if self.editor.text() != text && self.editor.raw_text() != text {
             self.editor.set_text(text);
             self.editor.driver(font_ctx, layout_ctx).refresh_layout();
         }

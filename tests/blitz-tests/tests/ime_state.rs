@@ -121,3 +121,48 @@ fn malformed_native_offsets_leave_editor_and_events_unchanged() {
     );
     assert!(values.lock().unwrap().is_empty());
 }
+
+#[test]
+fn controlled_value_echo_preserves_active_composition_and_selection() {
+    let (mut doc, id, values) = editor();
+    state(&mut doc, &values, "Aé🦀Z", (8, 8), None);
+    state(&mut doc, &values, "Aé東京Z", (9, 3), Some((3, 9)));
+    let value_attr = blitz_dom::QualName::new(
+        None,
+        blitz_dom::Namespace::from(""),
+        blitz_dom::LocalName::from("value"),
+    );
+    // A controlled UI writes its latest Input value back into the DOM. The
+    // unchanged raw text must not cancel the IME's still-active composing span.
+    doc.mutate()
+        .set_attribute(id, value_attr.clone(), "Aé東京Z");
+    doc.resolve(0.0);
+    let editor = &doc
+        .get_node(id)
+        .unwrap()
+        .element_data()
+        .unwrap()
+        .text_input_data()
+        .unwrap()
+        .editor;
+    assert_eq!(editor.raw_text(), "Aé東京Z");
+    assert_eq!(*editor.raw_compose(), Some(3..9));
+    assert_eq!(editor.raw_selection().anchor().index(), 9);
+    assert_eq!(editor.raw_selection().focus().index(), 3);
+
+    // An actual external text change still replaces the buffer and ends IME
+    // composition, without fabricating a user Input event.
+    doc.mutate().set_attribute(id, value_attr, "External");
+    doc.resolve(0.0);
+    let editor = &doc
+        .get_node(id)
+        .unwrap()
+        .element_data()
+        .unwrap()
+        .text_input_data()
+        .unwrap()
+        .editor;
+    assert_eq!(editor.raw_text(), "External");
+    assert!(editor.raw_compose().is_none());
+    assert_eq!(*values.lock().unwrap(), ["Aé🦀Z", "Aé東京Z"]);
+}
