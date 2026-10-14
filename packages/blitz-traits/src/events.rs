@@ -757,6 +757,17 @@ pub enum BlitzImeEvent {
     /// Right before this event winit will send empty [`Self::Preedit`] event.
     Commit(String),
 
+    /// Replace the native editor's complete text, selection and composing state.
+    ///
+    /// Offsets are absolute UTF-8 byte boundaries in `text`. Selection preserves
+    /// anchor/focus direction; composition is an ordered, nonempty range.
+    /// Used by platforms whose input connection publishes an editable snapshot.
+    SetState {
+        text: String,
+        selection: (usize, usize),
+        composition: Option<(usize, usize)>,
+    },
+
     /// Delete text surrounding the cursor or selection.
     ///
     /// This event does not affect either the pre-edit string.

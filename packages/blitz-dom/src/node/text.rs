@@ -782,6 +782,33 @@ impl TextInputData {
                 driver.insert_or_replace_selection(&text);
                 Some(GeneratedTextInputEvent::Input)
             }
+            BlitzImeEvent::SetState {
+                text,
+                selection,
+                composition,
+            } => {
+                let boundary = |index| text.is_char_boundary(index);
+                if !boundary(selection.0)
+                    || !boundary(selection.1)
+                    || composition.is_some_and(|(start, end)| {
+                        start >= end || !boundary(start) || !boundary(end)
+                    })
+                {
+                    return None;
+                }
+                let previous = driver.editor.text().to_string();
+                driver.editor.set_text(&text);
+                driver.refresh_layout();
+                driver.select_byte_range(selection.0, selection.1);
+                if let Some((start, end)) = composition {
+                    driver.set_compose_byte_range(start, end);
+                }
+                Some(if driver.editor.text() != previous.as_str() {
+                    GeneratedTextInputEvent::Input
+                } else {
+                    GeneratedTextInputEvent::PreEditChange
+                })
+            }
             BlitzImeEvent::Preedit(text, cursor) => {
                 if text.is_empty() {
                     driver.clear_compose();
