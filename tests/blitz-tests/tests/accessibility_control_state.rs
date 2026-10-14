@@ -64,3 +64,27 @@ fn empty_explicit_name_does_not_replace_content_labelling() {
     assert_eq!(node(&doc, "task").label(), None);
     assert!(!node(&doc, "task").labelled_by().is_empty());
 }
+
+#[test]
+fn platform_consumer_derives_button_name_from_visible_text() {
+    let doc = doc(
+        r#"<button id=plain>Load 100</button><button id=nested><span>Café 東京</span></button><button id=explicit aria-label="Save task">✓</button>"#,
+    );
+    let tree = accesskit_consumer::Tree::new(doc.build_accessibility_tree(), true);
+    let state = tree.state();
+    for (id, expected) in [
+        ("plain", "Load 100"),
+        ("nested", "Café 東京"),
+        ("explicit", "Save task"),
+    ] {
+        let id = NodeId(doc.get_element_by_id(id).unwrap().as_u64());
+        assert_eq!(
+            state
+                .node_by_tree_local_id(id, accesskit::TreeId::ROOT)
+                .unwrap()
+                .label()
+                .as_deref(),
+            Some(expected)
+        );
+    }
+}

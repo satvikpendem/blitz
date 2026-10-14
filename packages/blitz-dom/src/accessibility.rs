@@ -111,7 +111,7 @@ impl BaseDocument {
     ) -> (NodeId, AccessKitNode) {
         let id = NodeId(node.id.as_u64());
 
-        let mut builder = AccessKitNode::default();
+        let mut builder = AccessKitNode::new(Role::GenericContainer);
         if node.parent.is_none() {
             builder.set_role(Role::Window)
         } else if let Some(element_data) = node.element_data() {
@@ -123,7 +123,7 @@ impl BaseDocument {
             let role = role_attr
                 .and_then(role_from_name)
                 .or_else(|| role_from_element_data(element_data))
-                .unwrap_or(Role::Unknown);
+                .unwrap_or(Role::GenericContainer);
 
             builder.set_role(role);
 
@@ -183,7 +183,9 @@ impl BaseDocument {
 
             builder.set_html_tag(name);
         } else if node.is_text_node() {
-            builder.set_role(Role::TextRun);
+            // AccessKit derives control names from Label values. TextRun is for
+            // text-range metadata and its value does not contribute a label.
+            builder.set_role(Role::Label);
             builder.set_value(node.text_content());
             parent.push_labelled_by(id)
         }
