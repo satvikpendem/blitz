@@ -44,6 +44,16 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
         event: BlitzShellEvent,
     ) {
         match event {
+            #[cfg(target_os = "android")]
+            BlitzShellEvent::AndroidInsetsChanged {
+                window_id,
+                monitor_id,
+                insets,
+            } => {
+                if let Some(window) = self.windows.get_mut(&window_id) {
+                    window.apply_android_insets(monitor_id, insets);
+                }
+            }
             BlitzShellEvent::Poll { window_id } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
                     window.poll();

@@ -8,6 +8,8 @@
 //!  - `hot-reload`: Enables hot-reloading of Dioxus RSX.
 //!  - `tracing`: Enables tracing support.
 
+#[cfg(target_os = "android")]
+mod android_insets;
 mod application;
 mod convert_events;
 mod event;

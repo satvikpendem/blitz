@@ -10,6 +10,12 @@ use accesskit_xplat::WindowEvent as AccessKitEvent;
 
 #[derive(Debug, Clone)]
 pub enum BlitzShellEvent {
+    #[cfg(target_os = "android")]
+    AndroidInsetsChanged {
+        window_id: WindowId,
+        monitor_id: u64,
+        insets: winit::dpi::PhysicalInsets<u32>,
+    },
     Poll {
         window_id: WindowId,
     },

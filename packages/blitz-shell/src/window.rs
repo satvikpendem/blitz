@@ -97,6 +97,8 @@ pub struct View<Rend: WindowRenderer> {
     pub animation_timer: Option<Instant>,
     pub is_visible: bool,
     pub safe_area_insets: PhysicalInsets<u32>,
+    #[cfg(target_os = "android")]
+    android_insets: crate::android_insets::AndroidInsetsMonitor,
 
     #[cfg(target_arch = "wasm32")]
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
@@ -147,6 +149,22 @@ impl<Rend: WindowRenderer> View<Rend> {
         let attrs = config.attributes.with_visible(false);
 
         let winit_window: Arc<dyn Window> = Arc::from(event_loop.create_window(attrs).unwrap());
+        #[cfg(target_os = "android")]
+        let android_insets = {
+            let window_id = winit_window.id();
+            let proxy = proxy.clone();
+            crate::android_insets::AndroidInsetsMonitor::new(
+                &crate::current_android_app(),
+                move |monitor_id, insets| {
+                    proxy.send_event(BlitzShellEvent::AndroidInsetsChanged {
+                        window_id,
+                        monitor_id,
+                        insets,
+                    });
+                },
+            )
+            .expect("Android window-inset observer initialization failed")
+        };
         #[cfg(feature = "accessibility")]
         let accessibility = AccessibilityState::new(&*winit_window, proxy.clone());
 
@@ -219,6 +237,8 @@ impl<Rend: WindowRenderer> View<Rend> {
             buttons: MouseEventButtons::None,
             active_events: Arc::new(AtomicRefCell::new(Vec::new())),
             safe_area_insets,
+            #[cfg(target_os = "android")]
+            android_insets,
             #[cfg(target_arch = "wasm32")]
             pending_resize: None,
             #[cfg(target_arch = "wasm32")]
@@ -524,6 +544,26 @@ impl<Rend: WindowRenderer> View<Rend> {
         );
     }
 
+    #[cfg(target_os = "android")]
+    pub(crate) fn apply_android_insets(&mut self, monitor_id: u64, insets: PhysicalInsets<u32>) {
+        if monitor_id != self.android_insets.id() {
+            return;
+        }
+        let size = self.window.surface_size();
+        let left = insets.left.min(size.width);
+        let right = insets.right.min(size.width - left);
+        let top = insets.top.min(size.height);
+        let bottom = insets.bottom.min(size.height - top);
+        let insets = PhysicalInsets { left, top, right, bottom };
+        if self.safe_area_insets != insets {
+            self.safe_area_insets = insets;
+            self.with_viewport(|viewport| {
+                viewport.window_size = (size.width - left - right, size.height - top - bottom)
+            });
+            self.request_redraw();
+        }
+    }
+
     #[cfg(feature = "accessibility")]
     pub fn handle_accessibility_action(&mut self, request: &accesskit::ActionRequest) {
         let event = self.doc.inner().accessibility_action_event(request);
@@ -615,7 +655,10 @@ impl<Rend: WindowRenderer> View<Rend> {
                 }
             },
             WindowEvent::SurfaceResized(physical_size) => {
-                self.safe_area_insets = get_safe_area_insets(&*self.window);
+                #[cfg(not(target_os = "android"))]
+                {
+                    self.safe_area_insets = get_safe_area_insets(&*self.window);
+                }
                 // On WASM, defer the apply: wgpu's surface.configure clears the canvas,
                 // so running it every frame flickers during a drag. The browser stretches
                 // the stale backing store until the debounce timer settles.
@@ -630,8 +673,8 @@ impl<Rend: WindowRenderer> View<Rend> {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let insets = self.safe_area_insets;
-                    let width = physical_size.width - insets.left - insets.right;
-                    let height = physical_size.height - insets.top - insets.bottom;
+                    let width = physical_size.width.saturating_sub(insets.left.saturating_add(insets.right));
+                    let height = physical_size.height.saturating_sub(insets.top.saturating_add(insets.bottom));
                     self.with_viewport(|v| v.window_size = (width, height));
                     self.request_redraw();
                 }
