@@ -2198,6 +2198,16 @@ impl BaseDocument {
         let viewport_size_changed = old_device.au_viewport_size() != device.au_viewport_size();
         let styles_use_viewport_units = old_device.used_viewport_size();
 
+        // Cached computed styles retain their viewport dependencies across a
+        // device rebuild. In particular, coalesced resizes can return to the
+        // current size, so no style needs recascading to set this flag on the
+        // new device. Losing it would skip invalidation on every later resize.
+        if styles_use_viewport_units {
+            device.au_viewport_size_for_viewport_unit_resolution(
+                style::values::specified::length::ViewportVariant::UADefault,
+            );
+        }
+
         let origins = {
             let guard = &self.guard;
             let guards = StylesheetGuards {
