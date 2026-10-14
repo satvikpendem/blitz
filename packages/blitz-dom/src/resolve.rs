@@ -442,6 +442,8 @@ impl BaseDocument {
 
         // println!("\n\nRESOLVE LAYOUT\n===========\n");
 
+        #[cfg(not(feature = "writing-mode"))]
+        let scale = self.viewport().scale();
         let mut state = LayoutPassState::new(self);
         #[cfg(feature = "writing-mode")]
         let available_space = {
@@ -456,7 +458,7 @@ impl BaseDocument {
         #[cfg(feature = "writing-mode")]
         state.physicalise_and_round_layout(root_element_id);
         #[cfg(not(feature = "writing-mode"))]
-        taffy::round_layout(&mut state, root_element_id);
+        crate::layout::pixel_grid::round_layout(&mut state, root_element_id, scale);
 
         // println!("\n\n");
         // taffy::print_tree(self, root_node_id)

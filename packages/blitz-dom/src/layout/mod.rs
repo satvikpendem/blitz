@@ -27,6 +27,8 @@ pub(crate) mod damage;
 pub(crate) mod inline;
 pub(crate) mod list;
 pub(crate) mod paint_tree;
+#[cfg(not(feature = "writing-mode"))]
+pub(crate) mod pixel_grid;
 pub(crate) mod replaced;
 pub(crate) mod table;
 pub(crate) mod text_transform;
