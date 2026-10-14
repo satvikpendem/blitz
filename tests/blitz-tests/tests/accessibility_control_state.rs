@@ -88,3 +88,26 @@ fn platform_consumer_derives_button_name_from_visible_text() {
         );
     }
 }
+
+#[test]
+fn text_controls_expose_live_unicode_values_separately_from_names() {
+    use blitz_dom::Document;
+    use blitz_traits::events::{BlitzImeEvent, UiEvent};
+    let mut doc = doc(
+        r#"<input id=title aria-label="Task title"><textarea id=notes>Initial notes</textarea><input id=password type=password value=secret>"#,
+    );
+    let id = doc.get_element_by_id("title").unwrap();
+    doc.handle_ui_event(UiEvent::Focus(id));
+    doc.handle_ui_event(UiEvent::Ime(BlitzImeEvent::Commit("Café 東京 🦀".into())));
+    assert_eq!(node(&doc, "title").label(), Some("Task title"));
+    assert_eq!(node(&doc, "title").value(), Some("Café 東京 🦀"));
+    assert_eq!(node(&doc, "notes").value(), Some("Initial notes"));
+    assert_eq!(node(&doc, "password").value(), None);
+    let tree = accesskit_consumer::Tree::new(doc.build_accessibility_tree(), true);
+    let state = tree.state();
+    let input = state
+        .node_by_tree_local_id(NodeId(id.as_u64()), accesskit::TreeId::ROOT)
+        .unwrap();
+    assert_eq!(input.value().as_deref(), Some("Café 東京 🦀"));
+    assert_eq!(input.label().as_deref(), Some("Task title"));
+}

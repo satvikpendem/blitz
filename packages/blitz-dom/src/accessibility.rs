@@ -183,6 +183,15 @@ impl BaseDocument {
 
             builder.set_role(role);
 
+            // A text control's live editor value can differ from its initial HTML
+            // value attribute. Keep it separate from the accessible name.
+            // Password values need protected-text semantics before being exposed.
+            if role != Role::PasswordInput
+                && let Some(input) = element_data.text_input_data()
+            {
+                builder.set_value(input.editor.raw_text());
+            }
+
             let disabled = node
                 .element_state()
                 .contains(style_dom::ElementState::DISABLED)
