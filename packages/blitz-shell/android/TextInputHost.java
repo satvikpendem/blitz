@@ -2,6 +2,7 @@ package dev.blitz.shell;
 
 import android.app.Activity;
 import android.content.Context;
+import android.os.Build;
 import android.text.Editable;
 import android.text.Selection;
 import android.text.SpannableStringBuilder;
@@ -12,6 +13,7 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.TextAttribute;
 
 /** Public Android editor connection; the renderer and authoritative editor stay in Rust. */
 public final class TextInputHost {
@@ -139,7 +141,7 @@ public final class TextInputHost {
             info.imeOptions = imeOptions;
             info.initialSelStart = Selection.getSelectionStart(text);
             info.initialSelEnd = Selection.getSelectionEnd(text);
-            return new Connection(session);
+            return Build.VERSION.SDK_INT >= 34 ? new ModernConnection(session) : new Connection(session);
         }
     }
     private void changed() {
@@ -186,14 +188,14 @@ public final class TextInputHost {
             }
         });
     }
-    private final class Connection extends BaseInputConnection {
+    private class Connection extends BaseInputConnection {
         private final long editorSession;
         private boolean connectionClosed;
         Connection(long editorSession) {
             super(view, true);
             this.editorSession = editorSession;
         }
-        private boolean valid() { return !closed && !connectionClosed && active && session == editorSession; }
+        final boolean valid() { return !closed && !connectionClosed && active && session == editorSession; }
         @Override public Editable getEditable() {
             return valid() ? text : new SpannableStringBuilder();
         }
@@ -254,6 +256,20 @@ public final class TextInputHost {
                 publish();
             }
             connectionClosed = true;
+        }
+    }
+    // Keep the API34 signature in a class instantiated only on supported Android
+    // versions; the API26 connection need not resolve TextAttribute.
+    private final class ModernConnection extends Connection {
+        ModernConnection(long editorSession) { super(editorSession); }
+        @Override public boolean replaceText(int start, int end, CharSequence value,
+                int cursor, TextAttribute attribute) {
+            if (!valid()) return false;
+            // BaseInputConnection edits its buffer directly here instead of
+            // calling our commitText/setSelection overrides.
+            boolean accepted = super.replaceText(start, end, value, cursor, attribute);
+            changed();
+            return accepted;
         }
     }
 }
