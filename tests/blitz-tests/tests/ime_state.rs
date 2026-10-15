@@ -70,19 +70,19 @@ fn native_snapshot_preserves_unicode_selection_and_composition() {
     assert_eq!(*editor.raw_compose(), Some(1..3));
     assert_eq!(editor.raw_selection().anchor().index(), 7);
     assert_eq!(editor.raw_selection().focus().index(), 3);
-    assert_eq!(*values.lock().unwrap(), ["A🦀Z"]);
+    assert_eq!(*values.lock().unwrap(), ["A🦀Z", "Aé🦀Z"]);
 }
 
 #[test]
-fn native_composition_updates_do_not_commit_or_append_twice() {
+fn native_composition_updates_publish_live_values_without_appending_twice() {
     let (mut doc, id, values) = editor();
     state(&mut doc, &values, "A", (1, 1), None);
     state(&mut doc, &values, "Aé", (3, 3), Some((1, 3)));
     state(&mut doc, &values, "A東京", (7, 7), Some((1, 7)));
-    assert_eq!(*values.lock().unwrap(), ["A"]);
+    assert_eq!(*values.lock().unwrap(), ["A", "Aé", "A東京"]);
     state(&mut doc, &values, "A東京", (7, 7), None);
     state(&mut doc, &values, "A東京", (7, 7), None);
-    assert_eq!(*values.lock().unwrap(), ["A", "A東京"]);
+    assert_eq!(*values.lock().unwrap(), ["A", "Aé", "A東京", "A東京"]);
     assert_eq!(
         doc.get_node(id)
             .unwrap()
@@ -165,4 +165,50 @@ fn controlled_value_echo_preserves_active_composition_and_selection() {
     assert_eq!(editor.raw_text(), "External");
     assert!(editor.raw_compose().is_none());
     assert_eq!(*values.lock().unwrap(), ["Aé🦀Z", "Aé東京Z"]);
+}
+
+#[test]
+fn composing_only_snapshot_dispatches_the_visible_input_value() {
+    let (mut doc, _, values) = editor();
+    state(&mut doc, &values, "東京 🦀", (11, 11), Some((0, 11)));
+    assert_eq!(*values.lock().unwrap(), ["東京 🦀"]);
+    // A selection-only update does not fabricate another text input.
+    state(&mut doc, &values, "東京 🦀", (0, 6), Some((0, 11)));
+    assert_eq!(*values.lock().unwrap(), ["東京 🦀"]);
+}
+
+#[test]
+fn controlled_clear_replaces_an_uncommitted_composition() {
+    let (mut doc, id, values) = editor();
+    state(&mut doc, &values, "東京 🦀", (11, 11), Some((0, 11)));
+    let value_attr = blitz_dom::QualName::new(
+        None,
+        blitz_dom::Namespace::from(""),
+        blitz_dom::LocalName::from("value"),
+    );
+    doc.mutate().set_attribute(id, value_attr, "");
+    doc.resolve(0.0);
+    let editor = &doc
+        .get_node(id)
+        .unwrap()
+        .element_data()
+        .unwrap()
+        .text_input_data()
+        .unwrap()
+        .editor;
+    assert_eq!(editor.raw_text(), "");
+    assert!(editor.raw_compose().is_none());
+}
+
+#[test]
+fn preedit_events_publish_visible_changes_and_cancellation() {
+    let (mut doc, _, values) = editor();
+    for event in [
+        BlitzImeEvent::Preedit("東京".into(), Some((6, 6))),
+        BlitzImeEvent::Preedit("東京".into(), Some((0, 6))),
+        BlitzImeEvent::Disabled,
+    ] {
+        EventDriver::new(&mut doc, Handler(values.clone())).handle_ui_event(UiEvent::Ime(event));
+    }
+    assert_eq!(*values.lock().unwrap(), ["東京", ""]);
 }

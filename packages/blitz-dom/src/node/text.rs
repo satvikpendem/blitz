@@ -97,10 +97,10 @@ impl TextInputData {
         layout_ctx: &mut LayoutContext<TextBrush>,
         text: &str,
     ) {
-        // Controlled UIs can echo either the committed value or the raw Input
-        // value (including preedit). Neither unchanged value should cancel the
-        // active composition or reset its selection.
-        if self.editor.text() != text && self.editor.raw_text() != text {
+        // Input events include the visible composing text. Preserve an unchanged
+        // raw-value echo, but apply explicit resets even when the requested value
+        // happens to equal the editor's committed-only text.
+        if self.editor.raw_text() != text {
             self.editor.set_text(text);
             self.editor.driver(font_ctx, layout_ctx).refresh_layout();
         }
@@ -778,8 +778,13 @@ impl TextInputData {
                 None
             }
             BlitzImeEvent::Disabled => {
+                let had_composition = driver.editor.raw_compose().is_some();
                 driver.clear_compose();
-                Some(GeneratedTextInputEvent::PreEditChange)
+                Some(if had_composition {
+                    GeneratedTextInputEvent::Input
+                } else {
+                    GeneratedTextInputEvent::PreEditChange
+                })
             }
             BlitzImeEvent::Commit(text) => {
                 driver.insert_or_replace_selection(&text);
@@ -799,26 +804,33 @@ impl TextInputData {
                 {
                     return None;
                 }
-                let previous = driver.editor.text().to_string();
+                let text_changed = driver.editor.raw_text() != text;
+                let composition_ended =
+                    driver.editor.raw_compose().is_some() && composition.is_none();
                 driver.editor.set_text(&text);
                 driver.refresh_layout();
                 driver.select_byte_range(selection.0, selection.1);
                 if let Some((start, end)) = composition {
                     driver.set_compose_byte_range(start, end);
                 }
-                Some(if driver.editor.text() != previous.as_str() {
+                Some(if text_changed || composition_ended {
                     GeneratedTextInputEvent::Input
                 } else {
                     GeneratedTextInputEvent::PreEditChange
                 })
             }
             BlitzImeEvent::Preedit(text, cursor) => {
+                let previous = driver.editor.raw_text().to_string();
                 if text.is_empty() {
                     driver.clear_compose();
                 } else {
                     driver.set_compose(&text, cursor);
                 }
-                Some(GeneratedTextInputEvent::PreEditChange)
+                Some(if driver.editor.raw_text() != previous {
+                    GeneratedTextInputEvent::Input
+                } else {
+                    GeneratedTextInputEvent::PreEditChange
+                })
             }
             BlitzImeEvent::DeleteSurrounding {
                 before_bytes,
