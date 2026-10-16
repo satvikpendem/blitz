@@ -225,25 +225,34 @@ impl Document for DioxusDocument {
         // their own (e.g. JavaScript timers)
         let subdoc_changes = self.inner.borrow_mut().poll_subdocuments(Some(&waker));
 
-        {
-            let fut = self.vdom.wait_for_work();
-            let mut pinned_fut = pin!(fut);
+        let mut changed = subdoc_changes;
+        // Rendering may start a task after the scheduler's previous receiver
+        // waker has been consumed. Poll back to Pending to register the shell's
+        // waker again; a later worker completion must not need an unrelated UI
+        // event or redraw to resume. Bound repeated ready passes for fairness.
+        for _ in 0..8 {
+            {
+                let fut = self.vdom.wait_for_work();
+                let mut pinned_fut = pin!(fut);
 
-            let mut cx = TaskContext::from_waker(&waker);
-            match pinned_fut.as_mut().poll(&mut cx) {
-                std::task::Poll::Ready(_) => {}
-                std::task::Poll::Pending => return subdoc_changes,
+                let mut cx = TaskContext::from_waker(&waker);
+                if pinned_fut.as_mut().poll(&mut cx).is_pending() {
+                    return changed;
+                }
             }
+
+            let mut inner = self.inner.borrow_mut();
+            let mut writer = MutationWriter::new(&mut inner, &mut self.vdom_state);
+            self.vdom.render_immediate(&mut writer);
+            drop(writer);
+            drop(inner);
+            self.flush_queued_mounted_events();
+            changed = true;
         }
-
-        let mut inner = self.inner.borrow_mut();
-        let mut writer = MutationWriter::new(&mut inner, &mut self.vdom_state);
-        self.vdom.render_immediate(&mut writer);
-        drop(writer);
-        drop(inner);
-        self.flush_queued_mounted_events();
-
-        true
+        // If work keeps becoming ready, yield to the embedder without losing
+        // the request to continue polling on its next turn.
+        waker.wake_by_ref();
+        changed
     }
 
     fn handle_ui_event(&mut self, event: UiEvent) {
