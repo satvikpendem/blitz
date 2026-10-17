@@ -700,7 +700,10 @@ impl BaseDocument {
             }
 
             let (offset, max) = self.scroll_state(ScrollTarget::Node(parent), true);
-            if max.x > 0.0 || max.y > 0.0 {
+            // A responsive style/size change can remove the scrollable range
+            // while leaving the previous offset in the node. Visit that box
+            // too, so the existing programmatic clamp clears its stale offset.
+            if max.x > 0.0 || max.y > 0.0 || offset.x != 0.0 || offset.y != 0.0 {
                 let Some(port) = self.nodes.get(parent) else {
                     return;
                 };

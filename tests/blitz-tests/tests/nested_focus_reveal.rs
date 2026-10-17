@@ -186,3 +186,36 @@ fn absolute_editor_escapes_non_containing_scrollport() {
         .unwrap();
     assert!(r.y >= -1.0 && r.y + r.height <= 151.0, "{r:?}");
 }
+
+#[test]
+fn enlarged_scrollport_clears_offset_when_its_range_becomes_zero() {
+    check_scrollport_losing_range(false);
+}
+
+#[test]
+fn responsive_overflow_visible_clears_previous_panel_scroll() {
+    check_scrollport_losing_range(true);
+}
+
+fn check_scrollport_losing_range(remove_overflow: bool) {
+    let responsive = if remove_overflow {
+        "@media(min-height:500px){#outer{overflow:visible}}"
+    } else {
+        ""
+    };
+    let html = format!(
+        "<style>body{{margin:0}}#outer{{height:100vh;width:300px;overflow:auto}}#spacer{{height:300px}}input{{height:44px;width:160px;box-sizing:border-box}}{responsive}</style><div id=outer><div id=spacer></div><input id=edit value='Café 東京 🦀'></div>"
+    );
+    let mut d = doc(&html, 150, 1.0);
+    focus(&mut d);
+    let port = d.get_element_by_id("outer").unwrap();
+    // Establish the same old offset even when running against the root-only
+    // baseline, whose automatic focus reveal cannot scroll this panel yet.
+    d.scroll_to(port, 0.0, 194.0, ScrollBehavior::Instant);
+    assert!(d.get_node(port).unwrap().scroll_offset().y > 0.0);
+    d.viewport_mut().window_size = (400, 700);
+    d.resolve(2.0);
+    assert_eq!(d.get_node(port).unwrap().scroll_offset().y, 0.0);
+    assert_in_port(&d, "outer");
+    assert_eq!(d.viewport_scroll().y, 0.0);
+}
