@@ -110,6 +110,8 @@ pub struct View<Rend: WindowRenderer> {
     android_ime_generation: u64,
     #[cfg(target_os = "android")]
     android_ime_acknowledged: u64,
+    #[cfg(target_os = "android")]
+    android_ime_show_requested: bool,
 
     #[cfg(target_arch = "wasm32")]
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
@@ -267,6 +269,8 @@ impl<Rend: WindowRenderer> View<Rend> {
             android_ime_generation: 0,
             #[cfg(target_os = "android")]
             android_ime_acknowledged: 0,
+            #[cfg(target_os = "android")]
+            android_ime_show_requested: false,
             #[cfg(target_arch = "wasm32")]
             pending_resize: None,
             #[cfg(target_arch = "wasm32")]
@@ -438,8 +442,6 @@ impl<Rend: WindowRenderer> View<Rend> {
     }
 
     pub fn redraw(&mut self) {
-        #[cfg(target_os = "android")]
-        self.sync_android_ime();
         #[cfg(target_os = "ios")]
         self.ios_request_redraw.set(false);
         let animation_time = self.current_animation_time();
@@ -480,6 +482,11 @@ impl<Rend: WindowRenderer> View<Rend> {
         }
 
         drop(inner);
+
+        // Mounted focus can precede construction of the Rust text editor.
+        // Publish it only after layout has initialized its value and selection.
+        #[cfg(target_os = "android")]
+        self.sync_android_ime();
 
         if !is_blocked && is_visible && is_animating {
             self.request_redraw();
