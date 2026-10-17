@@ -630,17 +630,12 @@ impl BaseDocument {
                     .element_data()
                     .is_some_and(|el| el.text_input_data().is_some())
         });
-        if is_editor && self.can_reveal_editor_in_viewport(id) {
-            self.scroll_into_view(
-                id,
-                ScrollBehavior::Instant,
-                ScrollLogicalPosition::Nearest,
-                ScrollLogicalPosition::Nearest,
-            );
+        if is_editor && self.can_reveal_editor(id) {
+            self.reveal_editor_in_scroll_chain(id);
         }
     }
 
-    fn can_reveal_editor_in_viewport(&self, id: NodeId) -> bool {
+    fn can_reveal_editor(&self, id: NodeId) -> bool {
         use style::computed_values::visibility::T as Visibility;
         use style::values::specified::box_::DisplayOutside;
 
@@ -674,18 +669,72 @@ impl BaseDocument {
             }
             current = node.parent;
         }
-        // Root scrolling cannot reveal viewport-fixed boxes. Follow the actual
-        // positioning chain so a fixed box inside a transform remains eligible.
-        let root = self.try_root_element().map(|node| node.id);
-        current = Some(id);
-        while let Some(node) = current.and_then(|id| self.nodes.get(id)) {
-            let containing_block = node.containing_block();
-            if node.taffy_position() == taffy::Position::Fixed && containing_block == root {
-                return false;
-            }
-            current = containing_block;
-        }
         true
+    }
+
+    /// Reveal the editor inside each enclosing scrollport before revealing it in
+    /// the viewport. Following containing blocks skips DOM ancestors which do not
+    /// contain an absolutely positioned editor.
+    fn reveal_editor_in_scroll_chain(&mut self, id: NodeId) {
+        let Some(root) = self.try_root_element().map(|node| node.id) else {
+            return;
+        };
+        let mut current = id;
+        while let Some(node) = self.nodes.get(current) {
+            let Some(parent) = node.containing_block() else {
+                return;
+            };
+            // Scrollports inside a fixed panel can reveal their contents, but
+            // moving the page cannot reveal a viewport-fixed positioning chain.
+            if node.taffy_position() == taffy::Position::Fixed && parent == root {
+                return;
+            }
+            if parent == root {
+                self.scroll_into_view(
+                    id,
+                    ScrollBehavior::Instant,
+                    ScrollLogicalPosition::Nearest,
+                    ScrollLogicalPosition::Nearest,
+                );
+                return;
+            }
+
+            let (offset, max) = self.scroll_state(ScrollTarget::Node(parent), true);
+            if max.x > 0.0 || max.y > 0.0 {
+                let Some(port) = self.nodes.get(parent) else {
+                    return;
+                };
+                let Some(target) = self.nodes.get(id) else {
+                    return;
+                };
+                // Cancel each box's own scroll offset to obtain its border-box
+                // position. Recompute after every inner scroll: the target moves
+                // relative to the next outer scrollport.
+                let target_position = target.absolute_position(
+                    target.scroll_offset().x as f32,
+                    target.scroll_offset().y as f32,
+                );
+                let port_position = port.absolute_position(offset.x as f32, offset.y as f32);
+                let border = port.final_layout().border;
+                let size = target.final_layout().size;
+                let x = Self::aligned_scroll_offset(
+                    offset.x,
+                    port.client_width() as f64,
+                    (target_position.x - port_position.x - border.left) as f64 + offset.x,
+                    size.width as f64,
+                    ScrollLogicalPosition::Nearest,
+                );
+                let y = Self::aligned_scroll_offset(
+                    offset.y,
+                    port.client_height() as f64,
+                    (target_position.y - port_position.y - border.top) as f64 + offset.y,
+                    size.height as f64,
+                    ScrollLogicalPosition::Nearest,
+                );
+                self.scroll_to(parent, x, y, ScrollBehavior::Instant);
+            }
+            current = parent;
+        }
     }
 
     /// Scroll the viewport so that the given element has the requested alignment in each axis.
