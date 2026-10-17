@@ -616,6 +616,30 @@ impl BaseDocument {
         }
     }
 
+    /// Apply a one-shot editor reveal after focus or viewport geometry changes.
+    pub(crate) fn reveal_pending_focus(&mut self) {
+        if !std::mem::take(&mut self.pending_focus_reveal) {
+            return;
+        }
+        let Some(id) = self.focus_node_id else {
+            return;
+        };
+        let is_editor = self.nodes.get(id).is_some_and(|node| {
+            node.is_focussable()
+                && node
+                    .element_data()
+                    .is_some_and(|el| el.text_input_data().is_some())
+        });
+        if is_editor {
+            self.scroll_into_view(
+                id,
+                ScrollBehavior::Instant,
+                ScrollLogicalPosition::Nearest,
+                ScrollLogicalPosition::Nearest,
+            );
+        }
+    }
+
     /// Scroll the viewport so that the given element has the requested alignment in each axis.
     pub fn scroll_into_view(
         &mut self,

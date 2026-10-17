@@ -113,6 +113,11 @@ impl BaseDocument {
         timer.record_time("layout");
         self.nodes.bump_geometry_generation();
 
+        // Keyboard/rotation changes can put the editor below the new viewport.
+        // Consume a queued reveal against fresh geometry, not on every frame:
+        // ordinary rerenders must not undo the user's subsequent scrolling.
+        self.reveal_pending_focus();
+
         // Resolve transforms
         self.resolve_transforms(root_node_id);
         timer.record_time("transform");

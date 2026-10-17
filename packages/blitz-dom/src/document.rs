@@ -242,6 +242,8 @@ pub struct BaseDocument {
     /// last [`resolve`](Self::resolve), to be applied (coalesced into a single
     /// device rebuild) at the start of the next resolve.
     pub(crate) pending_device_changes: DeviceChanges,
+    /// Reveal a focused text input once, after pending focus/viewport layout changes.
+    pub(crate) pending_focus_reveal: bool,
     /// Strategy for Stylo's style traversal during `resolve`.
     pub(crate) style_threading: StyleThreading,
     /// Whether incremental layout is enabled for this document. When disabled,
@@ -482,6 +484,7 @@ impl BaseDocument {
             viewport,
             media_type,
             pending_device_changes: DeviceChanges::empty(),
+            pending_focus_reveal: false,
             style_threading: config.style_threading,
             incremental_layout: config.incremental.unwrap_or(true),
             subdocument_depth: config.subdocument_depth,
@@ -1769,6 +1772,7 @@ impl BaseDocument {
         }
 
         self.focus_node_id = Some(focus_node_id);
+        self.pending_focus_reveal = true;
 
         // The focus is styled (:focus, :focus-visible, :focus-within), so
         // moving it changes what is on screen. Nothing else asks for the
@@ -2136,6 +2140,9 @@ impl BaseDocument {
             return;
         }
         self.pending_device_changes |= changes;
+        if changes.contains(DeviceChanges::VIEWPORT_SIZE) && self.focus_node_id.is_some() {
+            self.pending_focus_reveal = true;
+        }
         self.shell_provider.request_redraw();
     }
 
