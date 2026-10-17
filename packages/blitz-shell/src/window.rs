@@ -110,8 +110,6 @@ pub struct View<Rend: WindowRenderer> {
     android_ime_generation: u64,
     #[cfg(target_os = "android")]
     android_ime_acknowledged: u64,
-    #[cfg(target_os = "android")]
-    android_ime_show_requested: bool,
 
     #[cfg(target_arch = "wasm32")]
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
@@ -269,8 +267,6 @@ impl<Rend: WindowRenderer> View<Rend> {
             android_ime_generation: 0,
             #[cfg(target_os = "android")]
             android_ime_acknowledged: 0,
-            #[cfg(target_os = "android")]
-            android_ime_show_requested: false,
             #[cfg(target_arch = "wasm32")]
             pending_resize: None,
             #[cfg(target_arch = "wasm32")]

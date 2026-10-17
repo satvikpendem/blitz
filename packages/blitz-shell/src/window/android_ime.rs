@@ -66,12 +66,6 @@ impl<Rend: WindowRenderer> View<Rend> {
             self.android_ime_focus = focus;
             self.android_ime_generation = self.android_ime_generation.wrapping_add(1).max(1);
             self.android_ime_acknowledged = 0;
-            // Programmatic/mounted focus needs the same keyboard activation as
-            // touch focus. Keep it one-shot so redraws respect Back dismissal.
-            self.android_ime_show_requested = focus.is_some();
-        }
-        if focus.is_none() {
-            self.android_ime_show_requested = false;
         }
         let (session, state, input_type, options) = match snapshot {
             Some((_, state, input_type, options)) => {
@@ -96,13 +90,6 @@ impl<Rend: WindowRenderer> View<Rend> {
             options,
         ) {
             eprintln!("Android editor synchronization failed: {error}");
-            return;
-        }
-        if self.android_ime_show_requested && self.is_visible {
-            match self.android_ime.show(self.android_ime_generation) {
-                Ok(()) => self.android_ime_show_requested = false,
-                Err(error) => eprintln!("Android keyboard activation failed: {error}"),
-            }
         }
     }
 
@@ -170,7 +157,11 @@ impl<Rend: WindowRenderer> View<Rend> {
     }
 
     pub(super) fn show_android_ime(&mut self) {
-        self.android_ime_show_requested = true;
         self.sync_android_ime();
+        if self.android_ime_focus.is_some() {
+            if let Err(error) = self.android_ime.show(self.android_ime_generation) {
+                eprintln!("Android keyboard activation failed: {error}");
+            }
+        }
     }
 }
