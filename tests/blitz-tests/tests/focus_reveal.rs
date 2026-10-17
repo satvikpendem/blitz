@@ -5,8 +5,15 @@ use blitz_traits::shell::{ColorScheme, Viewport};
 use std::sync::Arc;
 
 fn doc(height: u32, scale: f32) -> HtmlDocument {
-    let mut doc = HtmlDocument::from_html(
+    custom_doc(
+        height,
+        scale,
         "<style>body{margin:0}#spacer{height:300px}input{height:48px;width:240px;box-sizing:border-box}#tail{height:600px}</style><div id=spacer></div><input id=edit value='Café 東京 🦀'><div id=tail></div>",
+    )
+}
+fn custom_doc(height: u32, scale: f32, html: &str) -> HtmlDocument {
+    let mut doc = HtmlDocument::from_html(
+        html,
         DocumentConfig {
             viewport: Some(Viewport::new(
                 (400.0 * scale) as u32,
@@ -129,5 +136,67 @@ fn enlarged_viewport_clamps_old_scroll_range() {
     d.viewport_mut().window_size = (400, 1000);
     d.resolve(2.0);
     assert_eq!(d.viewport_scroll().y, 0.0);
+    assert_visible(&d);
+}
+
+#[test]
+fn hidden_editor_on_responsive_resize_preserves_manual_scroll() {
+    for rule in [
+        "#edit{display:none}",
+        "#wrap{display:none}",
+        "#edit{visibility:hidden}",
+        "#wrap{visibility:hidden}",
+    ] {
+        let html = format!(
+            "<style>body{{margin:0}}#spacer{{height:300px}}input{{height:48px}}#tail{{height:2000px}}@media(min-width:800px){{{rule}}}</style><div id=spacer></div><div id=wrap><input id=edit value='Café 東京 🦀'></div><div id=tail></div>"
+        );
+        let mut d = custom_doc(700, 1.0, &html);
+        focus(&mut d);
+        let root = d.root_element().id;
+        d.scroll_to(root, 0.0, 500.0, ScrollBehavior::Instant);
+        let before = d.viewport_scroll();
+        d.viewport_mut().window_size = (900, 700);
+        d.resolve(2.0);
+        assert_eq!(d.viewport_scroll(), before, "hidden by {rule}");
+    }
+}
+
+#[test]
+fn visible_child_of_visibility_hidden_ancestor_is_revealed() {
+    let mut d = custom_doc(
+        150,
+        1.0,
+        "<style>body{margin:0}#spacer{height:300px}#wrap{visibility:hidden}input{visibility:visible;height:48px}#tail{height:600px}</style><div id=spacer></div><div id=wrap><input id=edit value='Café 東京 🦀'></div><div id=tail></div>",
+    );
+    focus(&mut d);
+    assert_visible(&d);
+}
+
+#[test]
+fn viewport_fixed_editor_preserves_background_scroll_on_focus_and_resize() {
+    for rule in ["#edit", "#wrap"] {
+        let html = format!(
+            "<style>body{{margin:0;height:2000px}}input{{height:48px}}{rule}{{position:fixed;top:20px}}</style><div id=wrap><input id=edit value='Café 東京 🦀'></div>"
+        );
+        let mut d = custom_doc(700, 1.0, &html);
+        let root = d.root_element().id;
+        d.scroll_to(root, 0.0, 500.0, ScrollBehavior::Instant);
+        let before = d.viewport_scroll();
+        focus(&mut d);
+        assert_eq!(d.viewport_scroll(), before, "focus with fixed {rule}");
+        d.viewport_mut().window_size = (900, 150);
+        d.resolve(2.0);
+        assert_eq!(d.viewport_scroll(), before, "resize with fixed {rule}");
+    }
+}
+
+#[test]
+fn fixed_editor_contained_by_transform_still_reveals_in_document_flow() {
+    let mut d = custom_doc(
+        150,
+        1.0,
+        "<style>body{margin:0}#spacer{height:300px}#wrap{transform:translate(0px,0px);height:60px}input{position:fixed;top:0;height:48px}#tail{height:600px}</style><div id=spacer></div><div id=wrap><input id=edit value='Café 東京 🦀'></div><div id=tail></div>",
+    );
+    focus(&mut d);
     assert_visible(&d);
 }

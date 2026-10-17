@@ -630,7 +630,7 @@ impl BaseDocument {
                     .element_data()
                     .is_some_and(|el| el.text_input_data().is_some())
         });
-        if is_editor {
+        if is_editor && self.can_reveal_editor_in_viewport(id) {
             self.scroll_into_view(
                 id,
                 ScrollBehavior::Instant,
@@ -638,6 +638,54 @@ impl BaseDocument {
                 ScrollLogicalPosition::Nearest,
             );
         }
+    }
+
+    fn can_reveal_editor_in_viewport(&self, id: NodeId) -> bool {
+        use style::computed_values::visibility::T as Visibility;
+        use style::values::specified::box_::DisplayOutside;
+
+        let Some(node) = self.nodes.get(id) else {
+            return false;
+        };
+        // Visibility is inherited but descendants can explicitly restore it.
+        // Check the target's computed value rather than rejecting hidden ancestors.
+        if !node
+            .primary_styles()
+            .is_some_and(|style| style.clone_visibility() == Visibility::Visible)
+        {
+            return false;
+        }
+        let size = node.final_layout().size;
+        if !(size.width.is_finite()
+            && size.height.is_finite()
+            && size.width > 0.0
+            && size.height > 0.0)
+        {
+            return false;
+        }
+        // Descendants of display:none can retain old styles and geometry.
+        let mut current = Some(id);
+        while let Some(node) = current.and_then(|id| self.nodes.get(id)) {
+            if node
+                .display_style()
+                .is_some_and(|display| display.outside() == DisplayOutside::None)
+            {
+                return false;
+            }
+            current = node.parent;
+        }
+        // Root scrolling cannot reveal viewport-fixed boxes. Follow the actual
+        // positioning chain so a fixed box inside a transform remains eligible.
+        let root = self.try_root_element().map(|node| node.id);
+        current = Some(id);
+        while let Some(node) = current.and_then(|id| self.nodes.get(id)) {
+            let containing_block = node.containing_block();
+            if node.taffy_position() == taffy::Position::Fixed && containing_block == root {
+                return false;
+            }
+            current = containing_block;
+        }
+        true
     }
 
     /// Scroll the viewport so that the given element has the requested alignment in each axis.
