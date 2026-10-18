@@ -507,6 +507,37 @@ impl BaseDocument {
         }
     }
 
+    /// Reflow can shrink a scroll range or remove a scrolling box entirely. Keep
+    /// stored offsets valid even when no scroll request or focused descendant
+    /// visits the affected box. Hidden overflow retains programmatic scrolling;
+    /// visible/clip axes have a zero range in `scroll_state`.
+    pub(crate) fn normalize_scroll_offsets(&mut self) {
+        let mut targets: Vec<_> = self
+            .nodes
+            .iter()
+            // Text/comment nodes have no layout storage. Anonymous layout boxes
+            // can participate in the same scroll chain as ordinary elements.
+            .filter(|(_, node)| node.is_element() || node.is_anonymous())
+            .filter(|(_, node)| *node.scroll_offset() != Point::ZERO)
+            .map(|(id, _)| ScrollTarget::Node(id))
+            .collect();
+        if self.viewport_scroll() != Point::ZERO {
+            targets.push(ScrollTarget::Viewport);
+        }
+        for target in targets {
+            let (offset, max) = self.scroll_state(target, true);
+            let clamped = Point {
+                x: offset.x.clamp(0.0, max.x),
+                y: offset.y.clamp(0.0, max.y),
+            };
+            if offset != clamped {
+                // Do not issue a new scroll request: its interrupt flag would
+                // cancel an unrelated panel's smooth scroll animation.
+                self.write_scroll_offset(target, clamped, &mut |_| {});
+            }
+        }
+    }
+
     /// Start a smooth (animated) scroll towards the given absolute scroll offset. The
     /// animation is advanced each frame in [`BaseDocument::resolve_scroll_animation`].
     fn start_scroll_animation(&mut self, target: ScrollTarget, end: Point<f64>) {
@@ -764,6 +795,13 @@ impl BaseDocument {
                 let target = Point {
                     x: scroll_to.start.x + (scroll_to.end.x - scroll_to.start.x) * eased,
                     y: scroll_to.start.y + (scroll_to.end.y - scroll_to.start.y) * eased,
+                };
+                // Layout/style may have changed since the animation began.
+                // Never restore an offset outside the target's current range.
+                let (_, max) = self.scroll_state(scroll_to.target, true);
+                let target = Point {
+                    x: target.x.clamp(0.0, max.x),
+                    y: target.y.clamp(0.0, max.y),
                 };
                 // TODO: dispatch `scroll` events for programmatic scrolls.
                 self.write_scroll_offset(scroll_to.target, target, &mut |_| {});

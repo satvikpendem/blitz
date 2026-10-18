@@ -113,6 +113,10 @@ impl BaseDocument {
         timer.record_time("layout");
         self.nodes.bump_geometry_generation();
 
+        // Use fresh overflow/style and layout ranges for every scrolling box,
+        // including siblings outside the focused editor's ancestor chain.
+        self.normalize_scroll_offsets();
+
         // Resolve transforms
         self.resolve_transforms(root_node_id);
         timer.record_time("transform");

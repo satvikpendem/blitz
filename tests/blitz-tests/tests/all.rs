@@ -20,6 +20,7 @@ mod custom_widget_layout;
 mod detached_attribute;
 mod details_element;
 mod device_coalescing;
+mod scroll_offset_normalization;
 mod dir_attribute;
 mod display_contents;
 mod flex_grid_order;
