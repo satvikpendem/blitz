@@ -382,8 +382,12 @@ impl BaseDocument {
         let mut current = Some(node_id);
         while let Some(id) = current {
             let node = &self.nodes[id];
-            pos.x += node.unrounded_layout().location.x - node.scroll_offset().x as f32;
-            pos.y += node.unrounded_layout().location.y - node.scroll_offset().y as f32;
+            pos.x += node.unrounded_layout().location.x;
+            pos.y += node.unrounded_layout().location.y;
+            if id != node_id {
+                pos.x -= node.scroll_offset().x as f32;
+                pos.y -= node.scroll_offset().y as f32;
+            }
             has_vertical |= node.layout_data().writing_mode.is_vertical();
             current = node.containing_block();
         }
@@ -395,8 +399,10 @@ impl BaseDocument {
         let node = &self.nodes[node_id];
         let (mut pos, placer_wm, placer_size) = self.placer_geometry(node, node_id, root_id);
         let layout = physical_layout(*node.unrounded_layout(), placer_wm, placer_size);
-        pos.x += layout.location.x - node.scroll_offset().x as f32;
-        pos.y += layout.location.y - node.scroll_offset().y as f32;
+        // placer_geometry already applies ancestor scrolling. The target's own
+        // offset affects its contents, not the border box returned here.
+        pos.x += layout.location.x;
+        pos.y += layout.location.y;
         (pos, layout)
     }
 
