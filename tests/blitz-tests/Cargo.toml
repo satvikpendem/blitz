@@ -11,6 +11,9 @@ edition.workspace = true
 autotests = false
 rust-version.workspace = true
 
+[features]
+writing-mode = ["blitz-dom/writing-mode"]
+
 [dev-dependencies]
 # Blitz dependencies
 blitz-test-harness = { workspace = true }

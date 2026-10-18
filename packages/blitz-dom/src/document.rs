@@ -2348,6 +2348,28 @@ impl BaseDocument {
         (pos, *self.nodes[node_id].unrounded_layout())
     }
 
+    /// Page scroll moves ordinary boxes, but not a box whose containing-block
+    /// chain reaches a viewport-fixed ancestor. Keep local scroller offsets in
+    /// physical_unrounded_geometry; only the viewport translation is omitted.
+    fn client_viewport_scroll(&self, node_id: NodeId) -> crate::Point<f64> {
+        let root_id = self.try_root_element().map(|root| root.id);
+        let mut current = Some(node_id);
+        while let Some(id) = current {
+            let Some(node) = self.get_node(id) else {
+                break;
+            };
+            let containing_block = node.containing_block();
+            if node.taffy_position() == taffy::Position::Fixed
+                && containing_block.is_some()
+                && containing_block == root_id
+            {
+                return crate::Point::ZERO;
+            }
+            current = containing_block;
+        }
+        self.viewport_scroll()
+    }
+
     /// Computes the size and position of the `Node` relative to the viewport
     pub fn get_client_bounding_rect(&self, node_id: NodeId) -> Option<BoundingRect> {
         // Non-atomic inline elements have no layout box of their own: return
@@ -2359,10 +2381,11 @@ impl BaseDocument {
         self.get_node(node_id)?;
         let (pos, layout) = self.physical_unrounded_geometry(node_id);
         let size = layout.size;
+        let scroll = self.client_viewport_scroll(node_id);
 
         Some(BoundingRect {
-            x: snap_to_layout_unit(pos.x as f64 - self.viewport_scroll().x),
-            y: snap_to_layout_unit(pos.y as f64 - self.viewport_scroll().y),
+            x: snap_to_layout_unit(pos.x as f64 - scroll.x),
+            y: snap_to_layout_unit(pos.y as f64 - scroll.y),
             width: snap_to_layout_unit(size.width as f64),
             height: snap_to_layout_unit(size.height as f64),
         })
@@ -2401,13 +2424,14 @@ impl BaseDocument {
         // Union the per-line-box fragments into a single bounding box
         let bounds = rects.reduce(BoundingRect::union)?;
 
-        // Fragment rects are viewport-relative; convert to document-relative
-        let scroll = self.viewport_scroll();
+        // Undo the same viewport translation used by the fragment's inline
+        // root. Fixed fragments omitted it, so adding page scroll would drift.
+        let inline_root = node.inline_root_ancestor()?;
+        let scroll = self.client_viewport_scroll(inline_root.id);
         let mut x = bounds.x + scroll.x;
         let mut y = bounds.y + scroll.y;
 
         // Resolve the offsetParent from the inline root (the root itself if it is positioned)
-        let inline_root = node.inline_root_ancestor()?;
         let offset_parent = if inline_root.is_offset_parent() {
             Some(inline_root)
         } else {
@@ -2459,8 +2483,9 @@ impl BaseDocument {
         // Fragment boxes are relative to the inline root's border box.
         let (root_pos, _) = self.physical_unrounded_geometry(inline_root.id);
         // Inline fragments belong to the root's contents, unlike its own border box.
-        let origin_x = root_pos.x as f64 - inline_root.scroll_offset().x - self.viewport_scroll().x;
-        let origin_y = root_pos.y as f64 - inline_root.scroll_offset().y - self.viewport_scroll().y;
+        let scroll = self.client_viewport_scroll(inline_root.id);
+        let origin_x = root_pos.x as f64 - inline_root.scroll_offset().x - scroll.x;
+        let origin_y = root_pos.y as f64 - inline_root.scroll_offset().y - scroll.y;
 
         Some(fragments.map(move |rect| BoundingRect {
             x: snap_to_layout_unit(origin_x + rect.left as f64),
