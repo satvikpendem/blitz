@@ -121,6 +121,18 @@ fn visible_border_box_with_clipped_outline_still_scrolls() {
     assert_root_outline(&d);
 }
 #[test]
+fn multiline_editor_reveal_keeps_default_outline_inside_viewport() {
+    for scale in [1.0, 1.25, 2.625, 3.0] {
+        let mut d = doc(
+            "<style>body{margin:0}#spacer{height:300px}textarea{display:block;margin-left:10px;width:220px;height:48px;box-sizing:border-box}#tail{height:600px}</style><div id=spacer></div><textarea id=edit>Café 東京 🦀\nSecond line</textarea><div id=tail></div>",
+            150,
+            scale,
+        );
+        focus(&mut d);
+        assert_root_outline(&d);
+    }
+}
+#[test]
 fn nested_scrollports_reveal_complete_outline_inside_out() {
     for scale in [1.0, 1.25, 2.625, 3.0] {
         let mut d = doc(
