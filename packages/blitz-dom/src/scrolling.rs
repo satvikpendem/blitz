@@ -3,7 +3,7 @@
 
 use blitz_traits::events::{BlitzScrollEvent, DomEvent, DomEventData};
 use blitz_traits::node_id::NodeId;
-use style::values::computed::Overflow;
+use style::values::computed::{BorderStyle, OutlineStyle, Overflow};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::BaseDocument;
@@ -679,6 +679,7 @@ impl BaseDocument {
         let Some(root) = self.try_root_element().map(|node| node.id) else {
             return;
         };
+        let outline = self.editor_outline_outset(id);
         let mut current = id;
         while let Some(node) = self.nodes.get(current) {
             let Some(parent) = node.containing_block() else {
@@ -690,11 +691,12 @@ impl BaseDocument {
                 return;
             }
             if parent == root {
-                self.scroll_into_view(
+                self.scroll_into_view_with_outset(
                     id,
                     ScrollBehavior::Instant,
                     ScrollLogicalPosition::Nearest,
                     ScrollLogicalPosition::Nearest,
+                    outline,
                 );
                 return;
             }
@@ -723,20 +725,51 @@ impl BaseDocument {
                 let x = Self::aligned_scroll_offset(
                     offset.x,
                     port.client_width() as f64,
-                    (target_position.x - port_position.x - border.left) as f64 + offset.x,
-                    size.width as f64,
+                    (target_position.x - port_position.x - border.left) as f64 + offset.x - outline,
+                    size.width as f64 + 2.0 * outline,
                     ScrollLogicalPosition::Nearest,
                 );
                 let y = Self::aligned_scroll_offset(
                     offset.y,
                     port.client_height() as f64,
-                    (target_position.y - port_position.y - border.top) as f64 + offset.y,
-                    size.height as f64,
+                    (target_position.y - port_position.y - border.top) as f64 + offset.y - outline,
+                    size.height as f64 + 2.0 * outline,
                     ScrollLogicalPosition::Nearest,
                 );
                 self.scroll_to(parent, x, y, ScrollBehavior::Instant);
             }
             current = parent;
+        }
+    }
+
+    fn editor_outline_outset(&self, id: NodeId) -> f64 {
+        let Some(node) = self.nodes.get(id) else {
+            return 0.0;
+        };
+        let Some(style) = node.primary_styles() else {
+            return 0.0;
+        };
+        let outline = style.get_outline();
+        // Match the outline styles currently drawn by blitz-paint. The default
+        // focused editor outline extends outside the layout border box.
+        if matches!(
+            outline.outline_style,
+            OutlineStyle::Auto | OutlineStyle::BorderStyle(BorderStyle::None | BorderStyle::Hidden)
+        ) {
+            return 0.0;
+        }
+        if outline
+            .outline_color
+            .resolve_to_absolute(&style.clone_color())
+            .is_transparent()
+        {
+            return 0.0;
+        }
+        let width = outline.outline_width.0.to_f64_px();
+        if width.is_finite() && width > 0.0 {
+            width
+        } else {
+            0.0
         }
     }
 
@@ -747,6 +780,17 @@ impl BaseDocument {
         behavior: ScrollBehavior,
         vertical: ScrollLogicalPosition,
         horizontal: ScrollLogicalPosition,
+    ) {
+        self.scroll_into_view_with_outset(node_id, behavior, vertical, horizontal, 0.0);
+    }
+
+    fn scroll_into_view_with_outset(
+        &mut self,
+        node_id: NodeId,
+        behavior: ScrollBehavior,
+        vertical: ScrollLogicalPosition,
+        horizontal: ScrollLogicalPosition,
+        outset: f64,
     ) {
         let Some(node) = self.nodes.get(node_id) else {
             return;
@@ -763,15 +807,15 @@ impl BaseDocument {
         let x = Self::aligned_scroll_offset(
             self.viewport_scroll().x,
             viewport_width,
-            target.x as f64,
-            target_size.width as f64,
+            target.x as f64 - outset,
+            target_size.width as f64 + 2.0 * outset,
             horizontal,
         );
         let y = Self::aligned_scroll_offset(
             self.viewport_scroll().y,
             viewport_height,
-            target.y as f64,
-            target_size.height as f64,
+            target.y as f64 - outset,
+            target_size.height as f64 + 2.0 * outset,
             vertical,
         );
         self.scroll_to(root_id, x, y, behavior);
