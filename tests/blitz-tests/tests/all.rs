@@ -25,6 +25,7 @@ mod device_coalescing;
 mod scroller_client_geometry;
 mod dir_attribute;
 mod display_contents;
+mod fixed_client_geometry;
 mod flex_grid_order;
 mod focus_redraw;
 mod focus_within;
