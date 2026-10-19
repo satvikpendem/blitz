@@ -8,6 +8,16 @@
 //!  - `hot-reload`: Enables hot-reloading of Dioxus RSX.
 //!  - `tracing`: Enables tracing support.
 
+#[cfg(target_os = "android")]
+mod android_insets;
+#[cfg(target_os = "android")]
+mod android_java;
+#[cfg(target_os = "android")]
+mod android_ime;
+#[cfg(target_os = "android")]
+mod android_ime_state;
+#[cfg(target_os = "android")]
+pub use android_ime::AndroidImeEvent;
 mod application;
 mod convert_events;
 mod event;
@@ -40,9 +50,11 @@ use blitz_traits::shell::FileDialogFilter;
 use blitz_traits::shell::ShellProvider;
 use std::sync::Arc;
 use winit::cursor::{Cursor, CursorIcon};
+#[cfg(not(target_os = "android"))]
 use winit::dpi::{LogicalPosition, LogicalSize};
 pub use winit::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
 pub use winit::window::Window;
+#[cfg(not(target_os = "android"))]
 use winit::window::{ImeCapabilities, ImeEnableRequest, ImeRequest, ImeRequestData};
 
 #[derive(Default)]
@@ -114,6 +126,16 @@ impl ShellProvider for BlitzShellProvider {
         self.window.set_title(&title);
     }
     fn set_ime_enabled(&self, is_enabled: bool) {
+        #[cfg(target_os = "android")]
+        {
+            // View synchronizes its focused Rust editor with the standard Java
+            // InputConnection after DOM updates. NativeActivity's fallback only
+            // emulates key presses and drops multi-character Unicode commits.
+            let _ = is_enabled;
+            self.window.request_redraw();
+            return;
+        }
+        #[cfg(not(target_os = "android"))]
         if is_enabled {
             let _ = self.window.request_ime_update(ImeRequest::Enable(
                 ImeEnableRequest::new(ImeCapabilities::new(), ImeRequestData::default()).unwrap(),
@@ -123,12 +145,15 @@ impl ShellProvider for BlitzShellProvider {
         }
     }
     fn set_ime_cursor_area(&self, x: f32, y: f32, width: f32, height: f32) {
+        #[cfg(not(target_os = "android"))]
         let _ = self.window.request_ime_update(ImeRequest::Update(
             ImeRequestData::default().with_cursor_area(
                 LogicalPosition::new(x, y).into(),
                 LogicalSize::new(width, height).into(),
             ),
         ));
+        #[cfg(target_os = "android")]
+        let _ = (x, y, width, height);
     }
 
     fn request_window_close(&self) {

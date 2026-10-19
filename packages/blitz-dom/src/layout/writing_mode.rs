@@ -227,18 +227,22 @@ impl LayoutPassState<'_> {
         let size = unrounded.size;
         // As in `taffy::round_layout`: the box's outer edges are rounded in absolute coordinates and
         // every inner edge is rounded relative to them, so adjacent boxes never overlap or gap.
+        // Layout uses CSS pixels; snap edges to device pixels, not whole CSS
+        // pixels, or fractional-scale borders can be rounded down to zero.
+        let scale = self.viewport().scale();
+        let round = |v: f32| (v * scale).round() / scale;
         let rounded_pos = Point {
-            x: pos.x.round(),
-            y: pos.y.round(),
+            x: round(pos.x),
+            y: round(pos.y),
         };
         let rounded_end = Point {
-            x: (pos.x + size.width).round(),
-            y: (pos.y + size.height).round(),
+            x: round(pos.x + size.width),
+            y: round(pos.y + size.height),
         };
-        let from_left = |v: f32| (pos.x + v).round() - rounded_pos.x;
-        let from_top = |v: f32| (pos.y + v).round() - rounded_pos.y;
-        let from_right = |v: f32| rounded_end.x - (pos.x + size.width - v).round();
-        let from_bottom = |v: f32| rounded_end.y - (pos.y + size.height - v).round();
+        let from_left = |v: f32| round(pos.x + v) - rounded_pos.x;
+        let from_top = |v: f32| round(pos.y + v) - rounded_pos.y;
+        let from_right = |v: f32| rounded_end.x - round(pos.x + size.width - v);
+        let from_bottom = |v: f32| rounded_end.y - round(pos.y + size.height - v);
 
         let mut layout = unrounded;
         layout.location = Point {
@@ -249,7 +253,7 @@ impl LayoutPassState<'_> {
             width: rounded_end.x - rounded_pos.x,
             height: rounded_end.y - rounded_pos.y,
         };
-        layout.scrollbar_size = unrounded.scrollbar_size.map(f32::round);
+        layout.scrollbar_size = unrounded.scrollbar_size.map(round);
         layout.border = taffy::Rect {
             left: from_left(unrounded.border.left),
             right: from_right(unrounded.border.right),
@@ -382,8 +386,12 @@ impl BaseDocument {
         let mut current = Some(node_id);
         while let Some(id) = current {
             let node = &self.nodes[id];
-            pos.x += node.unrounded_layout().location.x - node.scroll_offset().x as f32;
-            pos.y += node.unrounded_layout().location.y - node.scroll_offset().y as f32;
+            pos.x += node.unrounded_layout().location.x;
+            pos.y += node.unrounded_layout().location.y;
+            if id != node_id {
+                pos.x -= node.scroll_offset().x as f32;
+                pos.y -= node.scroll_offset().y as f32;
+            }
             has_vertical |= node.layout_data().writing_mode.is_vertical();
             current = node.containing_block();
         }
@@ -395,8 +403,10 @@ impl BaseDocument {
         let node = &self.nodes[node_id];
         let (mut pos, placer_wm, placer_size) = self.placer_geometry(node, node_id, root_id);
         let layout = physical_layout(*node.unrounded_layout(), placer_wm, placer_size);
-        pos.x += layout.location.x - node.scroll_offset().x as f32;
-        pos.y += layout.location.y - node.scroll_offset().y as f32;
+        // placer_geometry already applies ancestor scrolling. The target's own
+        // offset affects its contents, not the border box returned here.
+        pos.x += layout.location.x;
+        pos.y += layout.location.y;
         (pos, layout)
     }
 

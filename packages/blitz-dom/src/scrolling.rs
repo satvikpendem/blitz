@@ -3,7 +3,7 @@
 
 use blitz_traits::events::{BlitzScrollEvent, DomEvent, DomEventData};
 use blitz_traits::node_id::NodeId;
-use style::values::computed::Overflow;
+use style::values::computed::{BorderStyle, OutlineStyle, Overflow};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::BaseDocument;
@@ -507,6 +507,37 @@ impl BaseDocument {
         }
     }
 
+    /// Reflow can shrink a scroll range or remove a scrolling box entirely. Keep
+    /// stored offsets valid even when no scroll request or focused descendant
+    /// visits the affected box. Hidden overflow retains programmatic scrolling;
+    /// visible/clip axes have a zero range in `scroll_state`.
+    pub(crate) fn normalize_scroll_offsets(&mut self) {
+        let mut targets: Vec<_> = self
+            .nodes
+            .iter()
+            // Text/comment nodes have no layout storage. Anonymous layout boxes
+            // can participate in the same scroll chain as ordinary elements.
+            .filter(|(_, node)| node.is_element() || node.is_anonymous())
+            .filter(|(_, node)| *node.scroll_offset() != Point::ZERO)
+            .map(|(id, _)| ScrollTarget::Node(id))
+            .collect();
+        if self.viewport_scroll() != Point::ZERO {
+            targets.push(ScrollTarget::Viewport);
+        }
+        for target in targets {
+            let (offset, max) = self.scroll_state(target, true);
+            let clamped = Point {
+                x: offset.x.clamp(0.0, max.x),
+                y: offset.y.clamp(0.0, max.y),
+            };
+            if offset != clamped {
+                // Do not issue a new scroll request: its interrupt flag would
+                // cancel an unrelated panel's smooth scroll animation.
+                self.write_scroll_offset(target, clamped, &mut |_| {});
+            }
+        }
+    }
+
     /// Start a smooth (animated) scroll towards the given absolute scroll offset. The
     /// animation is advanced each frame in [`BaseDocument::resolve_scroll_animation`].
     fn start_scroll_animation(&mut self, target: ScrollTarget, end: Point<f64>) {
@@ -616,6 +647,163 @@ impl BaseDocument {
         }
     }
 
+    /// Apply a one-shot editor reveal after focus or viewport geometry changes.
+    pub(crate) fn reveal_pending_focus(&mut self) {
+        if !std::mem::take(&mut self.pending_focus_reveal) {
+            return;
+        }
+        let Some(id) = self.focus_node_id else {
+            return;
+        };
+        let is_editor = self.nodes.get(id).is_some_and(|node| {
+            node.is_focussable()
+                && node
+                    .element_data()
+                    .is_some_and(|el| el.text_input_data().is_some())
+        });
+        if is_editor && self.can_reveal_editor(id) {
+            self.reveal_editor_in_scroll_chain(id);
+        }
+    }
+
+    fn can_reveal_editor(&self, id: NodeId) -> bool {
+        use style::computed_values::visibility::T as Visibility;
+        use style::values::specified::box_::DisplayOutside;
+
+        let Some(node) = self.nodes.get(id) else {
+            return false;
+        };
+        // Visibility is inherited but descendants can explicitly restore it.
+        // Check the target's computed value rather than rejecting hidden ancestors.
+        if !node
+            .primary_styles()
+            .is_some_and(|style| style.clone_visibility() == Visibility::Visible)
+        {
+            return false;
+        }
+        let size = node.final_layout().size;
+        if !(size.width.is_finite()
+            && size.height.is_finite()
+            && size.width > 0.0
+            && size.height > 0.0)
+        {
+            return false;
+        }
+        // Descendants of display:none can retain old styles and geometry.
+        let mut current = Some(id);
+        while let Some(node) = current.and_then(|id| self.nodes.get(id)) {
+            if node
+                .display_style()
+                .is_some_and(|display| display.outside() == DisplayOutside::None)
+            {
+                return false;
+            }
+            current = node.parent;
+        }
+        true
+    }
+
+    /// Reveal the editor inside each enclosing scrollport before revealing it in
+    /// the viewport. Following containing blocks skips DOM ancestors which do not
+    /// contain an absolutely positioned editor.
+    fn reveal_editor_in_scroll_chain(&mut self, id: NodeId) {
+        let Some(root) = self.try_root_element().map(|node| node.id) else {
+            return;
+        };
+        let outline = self.editor_outline_outset(id);
+        let mut current = id;
+        while let Some(node) = self.nodes.get(current) {
+            let Some(parent) = node.containing_block() else {
+                return;
+            };
+            // Scrollports inside a fixed panel can reveal their contents, but
+            // moving the page cannot reveal a viewport-fixed positioning chain.
+            if node.taffy_position() == taffy::Position::Fixed && parent == root {
+                return;
+            }
+            if parent == root {
+                self.scroll_into_view_with_outset(
+                    id,
+                    ScrollBehavior::Instant,
+                    ScrollLogicalPosition::Nearest,
+                    ScrollLogicalPosition::Nearest,
+                    outline,
+                );
+                return;
+            }
+
+            let (offset, max) = self.scroll_state(ScrollTarget::Node(parent), true);
+            // A responsive style/size change can remove the scrollable range
+            // while leaving the previous offset in the node. Visit that box
+            // too, so the existing programmatic clamp clears its stale offset.
+            if max.x > 0.0 || max.y > 0.0 || offset.x != 0.0 || offset.y != 0.0 {
+                let Some(port) = self.nodes.get(parent) else {
+                    return;
+                };
+                let Some(target) = self.nodes.get(id) else {
+                    return;
+                };
+                // Cancel each box's own scroll offset to obtain its border-box
+                // position. Recompute after every inner scroll: the target moves
+                // relative to the next outer scrollport.
+                let target_position = target.absolute_position(
+                    target.scroll_offset().x as f32,
+                    target.scroll_offset().y as f32,
+                );
+                let port_position = port.absolute_position(offset.x as f32, offset.y as f32);
+                let border = port.final_layout().border;
+                let size = target.final_layout().size;
+                let x = Self::aligned_scroll_offset(
+                    offset.x,
+                    port.client_width() as f64,
+                    (target_position.x - port_position.x - border.left) as f64 + offset.x - outline,
+                    size.width as f64 + 2.0 * outline,
+                    ScrollLogicalPosition::Nearest,
+                );
+                let y = Self::aligned_scroll_offset(
+                    offset.y,
+                    port.client_height() as f64,
+                    (target_position.y - port_position.y - border.top) as f64 + offset.y - outline,
+                    size.height as f64 + 2.0 * outline,
+                    ScrollLogicalPosition::Nearest,
+                );
+                self.scroll_to(parent, x, y, ScrollBehavior::Instant);
+            }
+            current = parent;
+        }
+    }
+
+    fn editor_outline_outset(&self, id: NodeId) -> f64 {
+        let Some(node) = self.nodes.get(id) else {
+            return 0.0;
+        };
+        let Some(style) = node.primary_styles() else {
+            return 0.0;
+        };
+        let outline = style.get_outline();
+        // Match the outline styles currently drawn by blitz-paint. The default
+        // focused editor outline extends outside the layout border box.
+        if matches!(
+            outline.outline_style,
+            OutlineStyle::Auto | OutlineStyle::BorderStyle(BorderStyle::None | BorderStyle::Hidden)
+        ) {
+            return 0.0;
+        }
+        if outline
+            .outline_color
+            .resolve_to_absolute(&style.clone_color())
+            .is_transparent()
+        {
+            return 0.0;
+        }
+        let width = outline.outline_width.0.to_f64_px();
+        if width.is_finite() && width > 0.0 {
+            width
+        } else {
+            0.0
+        }
+    }
+
     /// Scroll the viewport so that the given element has the requested alignment in each axis.
     pub fn scroll_into_view(
         &mut self,
@@ -623,6 +811,17 @@ impl BaseDocument {
         behavior: ScrollBehavior,
         vertical: ScrollLogicalPosition,
         horizontal: ScrollLogicalPosition,
+    ) {
+        self.scroll_into_view_with_outset(node_id, behavior, vertical, horizontal, 0.0);
+    }
+
+    fn scroll_into_view_with_outset(
+        &mut self,
+        node_id: NodeId,
+        behavior: ScrollBehavior,
+        vertical: ScrollLogicalPosition,
+        horizontal: ScrollLogicalPosition,
+        outset: f64,
     ) {
         let Some(node) = self.nodes.get(node_id) else {
             return;
@@ -639,15 +838,15 @@ impl BaseDocument {
         let x = Self::aligned_scroll_offset(
             self.viewport_scroll().x,
             viewport_width,
-            target.x as f64,
-            target_size.width as f64,
+            target.x as f64 - outset,
+            target_size.width as f64 + 2.0 * outset,
             horizontal,
         );
         let y = Self::aligned_scroll_offset(
             self.viewport_scroll().y,
             viewport_height,
-            target.y as f64,
-            target_size.height as f64,
+            target.y as f64 - outset,
+            target_size.height as f64 + 2.0 * outset,
             vertical,
         );
         self.scroll_to(root_id, x, y, behavior);
@@ -764,6 +963,13 @@ impl BaseDocument {
                 let target = Point {
                     x: scroll_to.start.x + (scroll_to.end.x - scroll_to.start.x) * eased,
                     y: scroll_to.start.y + (scroll_to.end.y - scroll_to.start.y) * eased,
+                };
+                // Layout/style may have changed since the animation began.
+                // Never restore an offset outside the target's current range.
+                let (_, max) = self.scroll_state(scroll_to.target, true);
+                let target = Point {
+                    x: target.x.clamp(0.0, max.x),
+                    y: target.y.clamp(0.0, max.y),
                 };
                 // TODO: dispatch `scroll` events for programmatic scrolls.
                 self.write_scroll_offset(scroll_to.target, target, &mut |_| {});

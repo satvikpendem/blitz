@@ -52,6 +52,8 @@ wasm-bindgen = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6.0" }
+jni = "0.21"
+accesskit_xplat = { workspace = true, optional = true, features = ["accesskit_android"] }
 
 [target.'cfg(any(target_os = "windows",target_os = "macos",target_os = "linux",target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 arboard = { workspace = true, optional = true }

@@ -71,6 +71,10 @@ pub enum UiEvent {
     KeyDown(BlitzKeyEvent),
     Ime(BlitzImeEvent),
     AppleStandardKeybinding(SmolStr),
+    /// Activate a semantic target without pointer hit testing.
+    Activate(NodeId),
+    /// Move input focus to a semantic target.
+    Focus(NodeId),
 }
 impl UiEvent {
     pub fn discriminant(&self) -> u8 {
@@ -756,6 +760,17 @@ pub enum BlitzImeEvent {
     ///
     /// Right before this event winit will send empty [`Self::Preedit`] event.
     Commit(String),
+
+    /// Replace the native editor's complete text, selection and composing state.
+    ///
+    /// Offsets are absolute UTF-8 byte boundaries in `text`. Selection preserves
+    /// anchor/focus direction; composition is an ordered, nonempty range.
+    /// Used by platforms whose input connection publishes an editable snapshot.
+    SetState {
+        text: String,
+        selection: (usize, usize),
+        composition: Option<(usize, usize)>,
+    },
 
     /// Delete text surrounding the cursor or selection.
     ///

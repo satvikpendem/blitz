@@ -1,0 +1,113 @@
+//! Explicit control names and live checkedness must reach the platform tree.
+use accesskit::{Node, NodeId, Toggled};
+use blitz_dom::{DocumentConfig, QualName, local_name, ns};
+use blitz_html::{HtmlDocument, HtmlProvider};
+use blitz_traits::shell::{ColorScheme, Viewport};
+use std::sync::Arc;
+
+fn doc(html: &str) -> HtmlDocument {
+    let mut doc = HtmlDocument::from_html(
+        html,
+        DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            html_parser_provider: Some(Arc::new(HtmlProvider) as _),
+            ..Default::default()
+        },
+    );
+    doc.resolve(0.0);
+    doc
+}
+fn node(doc: &HtmlDocument, id: &str) -> Node {
+    let id = NodeId(doc.get_element_by_id(id).unwrap().as_u64());
+    doc.build_accessibility_tree()
+        .nodes
+        .into_iter()
+        .find(|(candidate, _)| *candidate == id)
+        .unwrap()
+        .1
+}
+#[test]
+fn explicit_names_survive_unicode_and_dynamic_updates() {
+    let mut doc = doc(r#"<button id=edit aria-label="Edit Café 東京">✎</button>"#);
+    assert_eq!(node(&doc, "edit").label(), Some("Edit Café 東京"));
+    let id = doc.get_element_by_id("edit").unwrap();
+    let name = QualName::new(None, ns!(), local_name!("aria-label"));
+    doc.mutate().set_attribute(id, name.clone(), "Delete task");
+    assert_eq!(node(&doc, "edit").label(), Some("Delete task"));
+    doc.mutate().clear_attribute(id, name);
+    assert_eq!(node(&doc, "edit").label(), None);
+}
+#[test]
+fn checkbox_tree_uses_live_state_instead_of_initial_attribute() {
+    let mut doc = doc("<input id=task type=checkbox checked><input id=radio type=radio>");
+    assert_eq!(node(&doc, "task").toggled(), Some(Toggled::True));
+    assert_eq!(node(&doc, "radio").toggled(), Some(Toggled::False));
+    let id = doc.get_element_by_id("task").unwrap();
+    doc.get_node_mut(id)
+        .unwrap()
+        .element_data_mut()
+        .unwrap()
+        .set_checkbox_input_checked(false);
+    // Pointer-driven checkedness leaves the initial content attribute present.
+    assert!(
+        doc.get_node(id)
+            .unwrap()
+            .element_data()
+            .unwrap()
+            .has_attr(local_name!("checked"))
+    );
+    assert_eq!(node(&doc, "task").toggled(), Some(Toggled::False));
+}
+#[test]
+fn empty_explicit_name_does_not_replace_content_labelling() {
+    let doc = doc(r#"<button id=task aria-label="  ">Save</button>"#);
+    assert_eq!(node(&doc, "task").label(), None);
+    assert!(!node(&doc, "task").labelled_by().is_empty());
+}
+
+#[test]
+fn platform_consumer_derives_button_name_from_visible_text() {
+    let doc = doc(
+        r#"<button id=plain>Load 100</button><button id=nested><span>Café 東京</span></button><button id=explicit aria-label="Save task">✓</button>"#,
+    );
+    let tree = accesskit_consumer::Tree::new(doc.build_accessibility_tree(), true);
+    let state = tree.state();
+    for (id, expected) in [
+        ("plain", "Load 100"),
+        ("nested", "Café 東京"),
+        ("explicit", "Save task"),
+    ] {
+        let id = NodeId(doc.get_element_by_id(id).unwrap().as_u64());
+        assert_eq!(
+            state
+                .node_by_tree_local_id(id, accesskit::TreeId::ROOT)
+                .unwrap()
+                .label()
+                .as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn text_controls_expose_live_unicode_values_separately_from_names() {
+    use blitz_dom::Document;
+    use blitz_traits::events::{BlitzImeEvent, UiEvent};
+    let mut doc = doc(
+        r#"<input id=title aria-label="Task title"><textarea id=notes>Initial notes</textarea><input id=password type=password value=secret>"#,
+    );
+    let id = doc.get_element_by_id("title").unwrap();
+    doc.handle_ui_event(UiEvent::Focus(id));
+    doc.handle_ui_event(UiEvent::Ime(BlitzImeEvent::Commit("Café 東京 🦀".into())));
+    assert_eq!(node(&doc, "title").label(), Some("Task title"));
+    assert_eq!(node(&doc, "title").value(), Some("Café 東京 🦀"));
+    assert_eq!(node(&doc, "notes").value(), Some("Initial notes"));
+    assert_eq!(node(&doc, "password").value(), None);
+    let tree = accesskit_consumer::Tree::new(doc.build_accessibility_tree(), true);
+    let state = tree.state();
+    let input = state
+        .node_by_tree_local_id(NodeId(id.as_u64()), accesskit::TreeId::ROOT)
+        .unwrap();
+    assert_eq!(input.value().as_deref(), Some("Café 東京 🦀"));
+    assert_eq!(input.label().as_deref(), Some("Task title"));
+}

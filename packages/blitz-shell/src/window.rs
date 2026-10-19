@@ -64,6 +64,9 @@ impl<Rend: WindowRenderer> WindowConfig<Rend> {
     }
 }
 
+#[cfg(target_os = "android")]
+mod android_ime;
+
 pub struct View<Rend: WindowRenderer> {
     pub doc: Box<dyn Document>,
 
@@ -97,6 +100,16 @@ pub struct View<Rend: WindowRenderer> {
     pub animation_timer: Option<Instant>,
     pub is_visible: bool,
     pub safe_area_insets: PhysicalInsets<u32>,
+    #[cfg(target_os = "android")]
+    android_insets: crate::android_insets::AndroidInsetsMonitor,
+    #[cfg(target_os = "android")]
+    android_ime: crate::android_ime::AndroidImeBridge,
+    #[cfg(target_os = "android")]
+    android_ime_focus: Option<blitz_dom::NodeId>,
+    #[cfg(target_os = "android")]
+    android_ime_generation: u64,
+    #[cfg(target_os = "android")]
+    android_ime_acknowledged: u64,
 
     #[cfg(target_arch = "wasm32")]
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
@@ -147,6 +160,31 @@ impl<Rend: WindowRenderer> View<Rend> {
         let attrs = config.attributes.with_visible(false);
 
         let winit_window: Arc<dyn Window> = Arc::from(event_loop.create_window(attrs).unwrap());
+        #[cfg(target_os = "android")]
+        let android_insets = {
+            let window_id = winit_window.id();
+            let proxy = proxy.clone();
+            crate::android_insets::AndroidInsetsMonitor::new(
+                &crate::current_android_app(),
+                move |monitor_id, insets| {
+                    proxy.send_event(BlitzShellEvent::AndroidInsetsChanged {
+                        window_id,
+                        monitor_id,
+                        insets,
+                    });
+                },
+            )
+            .expect("Android window-inset observer initialization failed")
+        };
+        #[cfg(target_os = "android")]
+        let android_ime = {
+            let window_id = winit_window.id();
+            let proxy = proxy.clone();
+            crate::android_ime::AndroidImeBridge::new(&crate::current_android_app(),
+                move |monitor_id, session, sequence, event| {
+                    proxy.send_event(BlitzShellEvent::AndroidIme { window_id, monitor_id, session, sequence, event });
+                }).expect("Android input connection initialization failed")
+        };
         #[cfg(feature = "accessibility")]
         let accessibility = AccessibilityState::new(&*winit_window, proxy.clone());
 
@@ -219,6 +257,16 @@ impl<Rend: WindowRenderer> View<Rend> {
             buttons: MouseEventButtons::None,
             active_events: Arc::new(AtomicRefCell::new(Vec::new())),
             safe_area_insets,
+            #[cfg(target_os = "android")]
+            android_insets,
+            #[cfg(target_os = "android")]
+            android_ime,
+            #[cfg(target_os = "android")]
+            android_ime_focus: None,
+            #[cfg(target_os = "android")]
+            android_ime_generation: 0,
+            #[cfg(target_os = "android")]
+            android_ime_acknowledged: 0,
             #[cfg(target_arch = "wasm32")]
             pending_resize: None,
             #[cfg(target_arch = "wasm32")]
@@ -373,14 +421,6 @@ impl<Rend: WindowRenderer> View<Rend> {
         if let Some(waker) = &self.waker {
             let cx = std::task::Context::from_waker(waker);
             if self.doc.poll(Some(cx)) {
-                #[cfg(feature = "accessibility")]
-                {
-                    let inner = self.doc.inner();
-                    if inner.has_changes() {
-                        self.accessibility.update_tree(&inner);
-                    }
-                }
-
                 self.request_redraw();
                 return true;
             }
@@ -419,6 +459,11 @@ impl<Rend: WindowRenderer> View<Rend> {
         let insets = self.safe_area_insets;
 
         if !is_blocked && is_visible {
+            // Publish after layout, so new controls, scrolling and resize have
+            // current geometry. The adapter skips construction while inactive.
+            #[cfg(feature = "accessibility")]
+            self.accessibility
+                .update_tree(&inner, (insets.left, insets.top));
             self.renderer.render(|scene| {
                 paint_scene(
                     scene,
@@ -433,6 +478,11 @@ impl<Rend: WindowRenderer> View<Rend> {
         }
 
         drop(inner);
+
+        // Mounted focus can precede construction of the Rust text editor.
+        // Publish it only after layout has initialized its value and selection.
+        #[cfg(target_os = "android")]
+        self.sync_android_ime();
 
         if !is_blocked && is_visible && is_animating {
             self.request_redraw();
@@ -521,7 +571,44 @@ impl<Rend: WindowRenderer> View<Rend> {
     #[cfg(feature = "accessibility")]
     pub fn build_accessibility_tree(&mut self) {
         let inner = self.doc.inner();
-        self.accessibility.update_tree(&inner);
+        self.accessibility.update_tree(
+            &inner,
+            (self.safe_area_insets.left, self.safe_area_insets.top),
+        );
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn apply_android_insets(&mut self, monitor_id: u64, insets: PhysicalInsets<u32>) {
+        if monitor_id != self.android_insets.id() {
+            return;
+        }
+        let size = self.window.surface_size();
+        let left = insets.left.min(size.width);
+        let right = insets.right.min(size.width - left);
+        let top = insets.top.min(size.height);
+        let bottom = insets.bottom.min(size.height - top);
+        let insets = PhysicalInsets { left, top, right, bottom };
+        if self.safe_area_insets != insets {
+            self.safe_area_insets = insets;
+            self.with_viewport(|viewport| {
+                viewport.window_size = (size.width - left - right, size.height - top - bottom)
+            });
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(feature = "accessibility")]
+    pub fn handle_accessibility_action(&mut self, request: &accesskit::ActionRequest) {
+        let event = self.doc.inner().accessibility_action_event(request);
+        if let Some(event) = event {
+            #[cfg(target_os = "android")]
+            let show_ime = matches!(&event, UiEvent::Focus(_));
+            self.doc.handle_ui_event(event);
+            self.poll();
+            #[cfg(target_os = "android")]
+            if show_ime { self.show_android_ime(); }
+            self.request_redraw();
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -583,6 +670,16 @@ impl<Rend: WindowRenderer> View<Rend> {
     }
 
     pub fn handle_winit_event(&mut self, event: WindowEvent) {
+        #[cfg(target_os = "android")]
+        let show_ime = match &event {
+            WindowEvent::PointerButton { state: ElementState::Pressed, position, .. } => {
+                let coords = self.pointer_coords(*position);
+                let inner = self.doc.inner();
+                inner.hit(coords.page_x, coords.page_y).and_then(|hit| inner.get_node(hit.node_id))
+                    .and_then(|node| node.element_data()).and_then(|el| el.text_input_data()).is_some()
+            }
+            _ => false,
+        };
         // Update accessibility focus and window size state in response to a Winit WindowEvent
         #[cfg(feature = "accessibility")]
         self.accessibility
@@ -605,7 +702,10 @@ impl<Rend: WindowRenderer> View<Rend> {
                 }
             },
             WindowEvent::SurfaceResized(physical_size) => {
-                self.safe_area_insets = get_safe_area_insets(&*self.window);
+                #[cfg(not(target_os = "android"))]
+                {
+                    self.safe_area_insets = get_safe_area_insets(&*self.window);
+                }
                 // On WASM, defer the apply: wgpu's surface.configure clears the canvas,
                 // so running it every frame flickers during a drag. The browser stretches
                 // the stale backing store until the debounce timer settles.
@@ -620,8 +720,8 @@ impl<Rend: WindowRenderer> View<Rend> {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let insets = self.safe_area_insets;
-                    let width = physical_size.width - insets.left - insets.right;
-                    let height = physical_size.height - insets.top - insets.bottom;
+                    let width = physical_size.width.saturating_sub(insets.left.saturating_add(insets.right));
+                    let height = physical_size.height.saturating_sub(insets.top.saturating_add(insets.bottom));
                     self.with_viewport(|v| v.window_size = (width, height));
                     self.request_redraw();
                 }
@@ -875,5 +975,9 @@ impl<Rend: WindowRenderer> View<Rend> {
             WindowEvent::DragLeft { .. } => {},
             _ => {}
         }
+        #[cfg(target_os = "android")]
+        if show_ime { self.show_android_ime(); }
     }
+
+
 }

@@ -97,7 +97,10 @@ impl TextInputData {
         layout_ctx: &mut LayoutContext<TextBrush>,
         text: &str,
     ) {
-        if self.editor.text() != text {
+        // Input events include the visible composing text. Preserve an unchanged
+        // raw-value echo, but apply explicit resets even when the requested value
+        // happens to equal the editor's committed-only text.
+        if self.editor.raw_text() != text {
             self.editor.set_text(text);
             self.editor.driver(font_ctx, layout_ctx).refresh_layout();
         }
@@ -775,29 +778,76 @@ impl TextInputData {
                 None
             }
             BlitzImeEvent::Disabled => {
+                let had_composition = driver.editor.raw_compose().is_some();
                 driver.clear_compose();
-                Some(GeneratedTextInputEvent::PreEditChange)
+                Some(if had_composition {
+                    GeneratedTextInputEvent::Input
+                } else {
+                    GeneratedTextInputEvent::PreEditChange
+                })
             }
             BlitzImeEvent::Commit(text) => {
                 driver.insert_or_replace_selection(&text);
                 Some(GeneratedTextInputEvent::Input)
             }
+            BlitzImeEvent::SetState {
+                text,
+                selection,
+                composition,
+            } => {
+                let boundary = |index| text.is_char_boundary(index);
+                if !boundary(selection.0)
+                    || !boundary(selection.1)
+                    || composition.is_some_and(|(start, end)| {
+                        start >= end || !boundary(start) || !boundary(end)
+                    })
+                {
+                    return None;
+                }
+                let text_changed = driver.editor.raw_text() != text;
+                let composition_ended =
+                    driver.editor.raw_compose().is_some() && composition.is_none();
+                driver.editor.set_text(&text);
+                driver.refresh_layout();
+                driver.select_byte_range(selection.0, selection.1);
+                if let Some((start, end)) = composition {
+                    driver.set_compose_byte_range(start, end);
+                }
+                Some(if text_changed || composition_ended {
+                    GeneratedTextInputEvent::Input
+                } else {
+                    GeneratedTextInputEvent::PreEditChange
+                })
+            }
             BlitzImeEvent::Preedit(text, cursor) => {
+                let previous = driver.editor.raw_text().to_string();
                 if text.is_empty() {
                     driver.clear_compose();
                 } else {
                     driver.set_compose(&text, cursor);
                 }
-                Some(GeneratedTextInputEvent::PreEditChange)
+                Some(if driver.editor.raw_text() != previous {
+                    GeneratedTextInputEvent::Input
+                } else {
+                    GeneratedTextInputEvent::PreEditChange
+                })
             }
             BlitzImeEvent::DeleteSurrounding {
                 before_bytes,
                 after_bytes,
             } => {
-                let _ = before_bytes;
-                let _ = after_bytes;
-                // TODO
-                None
+                let old_len = driver.editor.raw_text().len();
+                // The event counts UTF-8 bytes around the selection. Parley's
+                // helpers clamp buffer limits, preserve the selection, update
+                // composition and reject ranges inside a Unicode scalar.
+                if let Some(count) = core::num::NonZeroUsize::new(before_bytes) {
+                    driver.delete_bytes_before_selection(count);
+                }
+                if let Some(count) = core::num::NonZeroUsize::new(after_bytes) {
+                    driver.delete_bytes_after_selection(count);
+                }
+                (driver.editor.raw_text().len() != old_len)
+                    .then_some(GeneratedTextInputEvent::Input)
             }
         }
     }

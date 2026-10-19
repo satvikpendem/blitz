@@ -242,6 +242,8 @@ pub struct BaseDocument {
     /// last [`resolve`](Self::resolve), to be applied (coalesced into a single
     /// device rebuild) at the start of the next resolve.
     pub(crate) pending_device_changes: DeviceChanges,
+    /// Reveal a focused text input once, after pending focus/viewport layout changes.
+    pub(crate) pending_focus_reveal: bool,
     /// Strategy for Stylo's style traversal during `resolve`.
     pub(crate) style_threading: StyleThreading,
     /// Whether incremental layout is enabled for this document. When disabled,
@@ -482,6 +484,7 @@ impl BaseDocument {
             viewport,
             media_type,
             pending_device_changes: DeviceChanges::empty(),
+            pending_focus_reveal: false,
             style_threading: config.style_threading,
             incremental_layout: config.incremental.unwrap_or(true),
             subdocument_depth: config.subdocument_depth,
@@ -1769,6 +1772,7 @@ impl BaseDocument {
         }
 
         self.focus_node_id = Some(focus_node_id);
+        self.pending_focus_reveal = true;
 
         // The focus is styled (:focus, :focus-visible, :focus-within), so
         // moving it changes what is on screen. Nothing else asks for the
@@ -2136,6 +2140,9 @@ impl BaseDocument {
             return;
         }
         self.pending_device_changes |= changes;
+        if changes.contains(DeviceChanges::VIEWPORT_SIZE) && self.focus_node_id.is_some() {
+            self.pending_focus_reveal = true;
+        }
         self.shell_provider.request_redraw();
     }
 
@@ -2197,6 +2204,16 @@ impl BaseDocument {
         let old_device = self.stylist.device();
         let viewport_size_changed = old_device.au_viewport_size() != device.au_viewport_size();
         let styles_use_viewport_units = old_device.used_viewport_size();
+
+        // Cached computed styles retain their viewport dependencies across a
+        // device rebuild. In particular, coalesced resizes can return to the
+        // current size, so no style needs recascading to set this flag on the
+        // new device. Losing it would skip invalidation on every later resize.
+        if styles_use_viewport_units {
+            device.au_viewport_size_for_viewport_unit_resolution(
+                style::values::specified::length::ViewportVariant::UADefault,
+            );
+        }
 
         let origins = {
             let guard = &self.guard;
@@ -2336,11 +2353,38 @@ impl BaseDocument {
         let mut current = Some(node_id);
         while let Some(id) = current {
             let node = &self.nodes[id];
-            pos.x += node.unrounded_layout().location.x - node.scroll_offset().x as f32;
-            pos.y += node.unrounded_layout().location.y - node.scroll_offset().y as f32;
+            pos.x += node.unrounded_layout().location.x;
+            pos.y += node.unrounded_layout().location.y;
+            // A scroll offset moves descendants, not the scroller's own border box.
+            if id != node_id {
+                pos.x -= node.scroll_offset().x as f32;
+                pos.y -= node.scroll_offset().y as f32;
+            }
             current = node.containing_block();
         }
         (pos, *self.nodes[node_id].unrounded_layout())
+    }
+
+    /// Page scroll moves ordinary boxes, but not a box whose containing-block
+    /// chain reaches a viewport-fixed ancestor. Keep local scroller offsets in
+    /// physical_unrounded_geometry; only the viewport translation is omitted.
+    fn client_viewport_scroll(&self, node_id: NodeId) -> crate::Point<f64> {
+        let root_id = self.try_root_element().map(|root| root.id);
+        let mut current = Some(node_id);
+        while let Some(id) = current {
+            let Some(node) = self.get_node(id) else {
+                break;
+            };
+            let containing_block = node.containing_block();
+            if node.taffy_position() == taffy::Position::Fixed
+                && containing_block.is_some()
+                && containing_block == root_id
+            {
+                return crate::Point::ZERO;
+            }
+            current = containing_block;
+        }
+        self.viewport_scroll()
     }
 
     /// Computes the size and position of the `Node` relative to the viewport
@@ -2354,10 +2398,11 @@ impl BaseDocument {
         self.get_node(node_id)?;
         let (pos, layout) = self.physical_unrounded_geometry(node_id);
         let size = layout.size;
+        let scroll = self.client_viewport_scroll(node_id);
 
         Some(BoundingRect {
-            x: snap_to_layout_unit(pos.x as f64 - self.viewport_scroll().x),
-            y: snap_to_layout_unit(pos.y as f64 - self.viewport_scroll().y),
+            x: snap_to_layout_unit(pos.x as f64 - scroll.x),
+            y: snap_to_layout_unit(pos.y as f64 - scroll.y),
             width: snap_to_layout_unit(size.width as f64),
             height: snap_to_layout_unit(size.height as f64),
         })
@@ -2396,13 +2441,14 @@ impl BaseDocument {
         // Union the per-line-box fragments into a single bounding box
         let bounds = rects.reduce(BoundingRect::union)?;
 
-        // Fragment rects are viewport-relative; convert to document-relative
-        let scroll = self.viewport_scroll();
+        // Undo the same viewport translation used by the fragment's inline
+        // root. Fixed fragments omitted it, so adding page scroll would drift.
+        let inline_root = node.inline_root_ancestor()?;
+        let scroll = self.client_viewport_scroll(inline_root.id);
         let mut x = bounds.x + scroll.x;
         let mut y = bounds.y + scroll.y;
 
         // Resolve the offsetParent from the inline root (the root itself if it is positioned)
-        let inline_root = node.inline_root_ancestor()?;
         let offset_parent = if inline_root.is_offset_parent() {
             Some(inline_root)
         } else {
@@ -2412,8 +2458,10 @@ impl BaseDocument {
         if let Some(parent) = offset_parent.filter(|parent| !parent.is_static_body()) {
             let (parent_pos, parent_layout) = self.physical_unrounded_geometry(parent.id);
             let border = parent_layout.border;
-            x -= (parent_pos.x + border.left) as f64;
-            y -= (parent_pos.y + border.top) as f64;
+            // Fragment bounds include the offset parent's content scroll; cancel it
+            // when expressing their unscrolled offset from its padding edge.
+            x -= (parent_pos.x + border.left) as f64 - parent.scroll_offset().x;
+            y -= (parent_pos.y + border.top) as f64 - parent.scroll_offset().y;
         }
 
         Some(BoundingRect {
@@ -2451,8 +2499,10 @@ impl BaseDocument {
 
         // Fragment boxes are relative to the inline root's border box.
         let (root_pos, _) = self.physical_unrounded_geometry(inline_root.id);
-        let origin_x = root_pos.x as f64 - self.viewport_scroll().x;
-        let origin_y = root_pos.y as f64 - self.viewport_scroll().y;
+        // Inline fragments belong to the root's contents, unlike its own border box.
+        let scroll = self.client_viewport_scroll(inline_root.id);
+        let origin_x = root_pos.x as f64 - inline_root.scroll_offset().x - scroll.x;
+        let origin_y = root_pos.y as f64 - inline_root.scroll_offset().y - scroll.y;
 
         Some(fragments.map(move |rect| BoundingRect {
             x: snap_to_layout_unit(origin_x + rect.left as f64),

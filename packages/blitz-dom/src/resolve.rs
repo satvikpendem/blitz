@@ -113,6 +113,15 @@ impl BaseDocument {
         timer.record_time("layout");
         self.nodes.bump_geometry_generation();
 
+        // Use fresh overflow/style and layout ranges for every scrolling box,
+        // including siblings outside the focused editor's ancestor chain.
+        self.normalize_scroll_offsets();
+
+        // Keyboard/rotation changes can put the editor below the new viewport.
+        // Consume a queued reveal against fresh geometry, not on every frame:
+        // ordinary rerenders must not undo the user's subsequent scrolling.
+        self.reveal_pending_focus();
+
         // Resolve transforms
         self.resolve_transforms(root_node_id);
         timer.record_time("transform");
@@ -442,6 +451,8 @@ impl BaseDocument {
 
         // println!("\n\nRESOLVE LAYOUT\n===========\n");
 
+        #[cfg(not(feature = "writing-mode"))]
+        let scale = self.viewport().scale();
         let mut state = LayoutPassState::new(self);
         #[cfg(feature = "writing-mode")]
         let available_space = {
@@ -456,7 +467,7 @@ impl BaseDocument {
         #[cfg(feature = "writing-mode")]
         state.physicalise_and_round_layout(root_element_id);
         #[cfg(not(feature = "writing-mode"))]
-        taffy::round_layout(&mut state, root_element_id);
+        crate::layout::pixel_grid::round_layout(&mut state, root_element_id, scale);
 
         // println!("\n\n");
         // taffy::print_tree(self, root_node_id)

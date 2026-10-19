@@ -44,6 +44,22 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
         event: BlitzShellEvent,
     ) {
         match event {
+            #[cfg(target_os = "android")]
+            BlitzShellEvent::AndroidIme { window_id, monitor_id, session, sequence, event } => {
+                if let Some(window) = self.windows.get_mut(&window_id) {
+                    window.apply_android_ime(monitor_id, session, sequence, event);
+                }
+            }
+            #[cfg(target_os = "android")]
+            BlitzShellEvent::AndroidInsetsChanged {
+                window_id,
+                monitor_id,
+                insets,
+            } => {
+                if let Some(window) = self.windows.get_mut(&window_id) {
+                    window.apply_android_insets(monitor_id, insets);
+                }
+            }
             BlitzShellEvent::Poll { window_id } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
                     window.poll();
@@ -84,8 +100,8 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
                         accesskit_xplat::WindowEvent::AccessibilityDeactivated => {
                             // TODO
                         }
-                        accesskit_xplat::WindowEvent::ActionRequested(_req) => {
-                            // TODO
+                        accesskit_xplat::WindowEvent::ActionRequested(req) => {
+                            window.handle_accessibility_action(req);
                         }
                     }
                 }

@@ -1,11 +1,12 @@
 use crate::{BlitzShellEvent, event::BlitzShellProxy};
-use accesskit::Rect;
+use accesskit::{Affine, NodeId, Rect};
 use accesskit_xplat::{Adapter, EventHandler, WindowEvent as AccessKitEvent};
 use blitz_dom::BaseDocument;
 use std::sync::Arc;
+#[cfg(not(target_os = "android"))]
+use winit::raw_window_handle::HasWindowHandle;
 use winit::{
     event::WindowEvent,
-    raw_window_handle::HasWindowHandle,
     window::{Window, WindowId},
 };
 
@@ -41,10 +42,28 @@ impl AccessibilityState {
             ),
         }
     }
-    pub fn update_tree(&mut self, doc: &BaseDocument) {
-        let _ = doc;
-        self.adapter
-            .update_if_active(|| doc.build_accessibility_tree());
+    pub fn update_tree(&mut self, doc: &BaseDocument, offset: (u32, u32)) {
+        self.adapter.update_if_active(|| {
+            let mut tree = doc.build_accessibility_tree();
+            // The DOM uses CSS pixels; the platform tree uses physical surface
+            // coordinates, including the same safe-area origin as painting.
+            if let Some((_, root)) = tree
+                .nodes
+                .iter_mut()
+                .find(|(id, _)| *id == NodeId(u64::MAX))
+            {
+                let scale = doc.viewport().scale_f64();
+                root.set_transform(Affine::new([
+                    scale,
+                    0.0,
+                    0.0,
+                    scale,
+                    offset.0 as f64,
+                    offset.1 as f64,
+                ]));
+            }
+            tree
+        });
     }
 
     /// Allows reacting to window events.

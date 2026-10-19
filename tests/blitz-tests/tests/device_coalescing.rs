@@ -108,3 +108,47 @@ fn color_scheme_change_recascades_styles() {
     // Layout is unaffected.
     assert_eq!(used_width(&doc, "#static"), 100.0);
 }
+
+#[test]
+fn net_zero_resize_keeps_cached_viewport_dependencies() {
+    let mut doc = make_doc(800, 600);
+    doc.resolve(0.0);
+    let initial_style = style_ptr(&doc, "#vw");
+
+    // Android first reports the final IME inset, then the animation's initial
+    // inset before the next frame. Net size is unchanged, so cached styles are
+    // valid, but they still depend on the viewport during later frames.
+    doc.viewport_mut().window_size = (800, 400);
+    doc.viewport_mut().window_size = (800, 600);
+    doc.resolve(0.0);
+    assert_eq!(
+        style_ptr(&doc, "#vw"),
+        initial_style,
+        "a net-zero resize should not require recascading valid styles"
+    );
+
+    doc.viewport_mut().window_size = (700, 500);
+    doc.resolve(0.0);
+    assert_eq!(used_width(&doc, "#vw"), 350.0);
+    let id = doc.query_selector("#vw").unwrap().unwrap();
+    assert_eq!(doc.get_node(id).unwrap().final_layout().size.height, 50.0);
+}
+
+#[test]
+fn height_units_follow_repeated_keyboard_sized_resizes_at_fractional_scale() {
+    let mut doc = make_doc(1080, 2201);
+    doc.viewport_mut().set_hidpi_scale(2.625);
+    doc.resolve(0.0);
+    for height in [2201, 1381, 2201, 1381, 2201, 1381] {
+        // Exercise an unchanged final size as well as actual height changes.
+        doc.viewport_mut().window_size = (1080, 1400);
+        doc.viewport_mut().window_size = (1080, height);
+        doc.resolve(0.0);
+        let id = doc.query_selector("#vw").unwrap().unwrap();
+        let physical_height = doc.get_node(id).unwrap().final_layout().size.height * 2.625;
+        assert!(
+            (physical_height - height as f32 * 0.1).abs() <= 1.01,
+            "10vh is stale at viewport height {height}: {physical_height} physical pixels"
+        );
+    }
+}
