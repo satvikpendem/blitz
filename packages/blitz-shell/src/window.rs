@@ -160,6 +160,8 @@ impl<Rend: WindowRenderer> View<Rend> {
         let attrs = config.attributes.with_visible(false);
 
         let winit_window: Arc<dyn Window> = Arc::from(event_loop.create_window(attrs).unwrap());
+        #[cfg(target_os = "ios")]
+        crate::ios_scene::prepare_window(&winit_window);
         #[cfg(target_os = "android")]
         let android_insets = {
             let window_id = winit_window.id();
