@@ -102,7 +102,7 @@ impl<Rend: WindowRenderer> View<Rend> {
     ) {
         use crate::{AndroidImeEvent, android_ime_state::AndroidEditorState};
         use blitz_traits::events::{BlitzKeyEvent, KeyState};
-        use keyboard_types::{Code, Key, Location, Modifiers};
+        use keyboard_types::{Code, Key, Location, Modifiers, NamedKey};
         self.sync_android_ime();
         if monitor_id != self.android_ime.id()
             || self.android_ime_focus.is_none()
@@ -131,9 +131,9 @@ impl<Rend: WindowRenderer> View<Rend> {
             }
             AndroidImeEvent::Action(action) => {
                 let (key, code, modifiers) = match action {
-                    0..=4 | 6 => (Key::Enter, Code::Enter, Modifiers::empty()),
-                    5 => (Key::Tab, Code::Tab, Modifiers::empty()),
-                    7 => (Key::Tab, Code::Tab, Modifiers::SHIFT),
+                    0..=4 | 6 => (Key::Named(NamedKey::Enter), Code::Enter, Modifiers::empty()),
+                    5 => (Key::Named(NamedKey::Tab), Code::Tab, Modifiers::empty()),
+                    7 => (Key::Named(NamedKey::Tab), Code::Tab, Modifiers::SHIFT),
                     _ => return,
                 };
                 Some(UiEvent::KeyDown(BlitzKeyEvent {
