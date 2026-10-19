@@ -5,7 +5,7 @@ use blitz_traits::{
     node_id::NodeId,
     shell::{ColorScheme, Viewport},
 };
-use keyboard_types::{Code, Key, Location, Modifiers};
+use keyboard_types::{Code, Key, Location, Modifiers, NamedKey};
 use std::sync::{Arc, Mutex};
 
 struct Handler(Arc<Mutex<Vec<String>>>);
@@ -30,7 +30,7 @@ fn key(doc: &mut HtmlDocument, values: &Arc<Mutex<Vec<String>>>, shift: bool) {
         doc,
         values,
         UiEvent::KeyDown(BlitzKeyEvent {
-            key: Key::ArrowLeft,
+            key: Key::Named(NamedKey::ArrowLeft),
             code: Code::ArrowLeft,
             modifiers: if shift {
                 Modifiers::SHIFT
